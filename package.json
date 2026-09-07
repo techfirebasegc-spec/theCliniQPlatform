@@ -5,7 +5,7 @@
   "scripts": {
     "dev:web": "pnpm --filter @cliniq/web dev",
     "dev:api": "pnpm --filter @cliniq/api dev",
-    "build": "pnpm --filter @cliniq/contracts build && pnpm --filter @cliniq/web build && pnpm --filter @cliniq/api build",
+    "build": "pnpm --filter @cliniq/contracts build && pnpm --filter @cliniq/config build && pnpm --filter @cliniq/web build && pnpm --filter @cliniq/api build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm --filter @cliniq/contracts build && pnpm --filter @cliniq/config build && pnpm -r typecheck",
     "test": "pnpm --filter @cliniq/contracts build && pnpm --filter @cliniq/config build && pnpm --filter @cliniq/api test",
