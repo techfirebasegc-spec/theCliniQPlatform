@@ -1,0 +1,18 @@
+{
+  "name": "cliniq-platform",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev:web": "pnpm --filter @cliniq/web dev",
+    "dev:api": "pnpm --filter @cliniq/api dev",
+    "build": "pnpm --filter @cliniq/contracts build && pnpm --filter @cliniq/web build && pnpm --filter @cliniq/api build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm --filter @cliniq/contracts build && pnpm --filter @cliniq/config build && pnpm -r typecheck",
+    "test": "pnpm --filter @cliniq/contracts build && pnpm --filter @cliniq/config build && pnpm --filter @cliniq/api test",
+    "db:migrate": "pnpm --filter @cliniq/api migrate:up",
+    "db:rollback": "pnpm --filter @cliniq/api migrate:down"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
+  }
+}

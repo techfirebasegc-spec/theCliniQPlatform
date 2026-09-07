@@ -1,0 +1,22 @@
+:root {
+  color-scheme: light;
+  font-family: Arial, sans-serif;
+  background: #f7fbff;
+  color: #142033;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; }
+
+main { width: min(720px, calc(100% - 2rem)); margin: 0 auto; padding: 5rem 0; }
+
+.eyebrow { color: #0f766e; font-size: .8rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+
+h1, h2 { color: #16407a; }
+
+section { margin-top: 2rem; padding: 1.5rem; border: 1px solid #dbe8f3; border-radius: 12px; background: #fff; }
+
+.status { color: #857000; }
+.status--available { color: #16803c; }
+.status--unavailable { color: #b42318; }
