@@ -6,6 +6,12 @@ const environmentSchema = z.object({
   WEB_URL: z.url(),
   DATABASE_URL: z.url().startsWith('postgresql://'),
   REDIS_URL: z.url().startsWith('redis://'),
+  FIREBASE_PROJECT_ID: z.string().trim().min(1),
+  SESSION_IDLE_TTL_SECONDS: z.coerce.number().int().positive(),
+  SESSION_ABSOLUTE_TTL_SECONDS: z.coerce.number().int().positive(),
+}).refine((environment) => environment.SESSION_ABSOLUTE_TTL_SECONDS >= environment.SESSION_IDLE_TTL_SECONDS, {
+  message: 'SESSION_ABSOLUTE_TTL_SECONDS must be greater than or equal to SESSION_IDLE_TTL_SECONDS',
+  path: ['SESSION_ABSOLUTE_TTL_SECONDS'],
 });
 
 export type Environment = z.infer<typeof environmentSchema>;
