@@ -3,6 +3,11 @@ import { createDatabase, type DatabaseHealth } from './infrastructure/database.j
 import { createRedis, type RedisHealth } from './infrastructure/redis.js';
 import { registerErrorHandler } from './middleware/errors.js';
 import { registerStatusRoutes } from './routes/status.js';
+import { registerProfileRoutes } from './routes/profiles.js';
+import { PostgresAuditRepository } from './modules/audit/postgres-audit-repository.js';
+import { PostgresProfileRepository } from './modules/profiles/postgres-profile-repository.js';
+import { ProfileService } from './modules/profiles/profiles.js';
+import { PostgresSessionRepository } from './modules/sessions/postgres-session-repository.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -24,6 +29,11 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   void app.register(cors, { origin: environment.WEB_URL, credentials: true });
   registerErrorHandler(app);
   void app.register(async (instance) => registerStatusRoutes(instance, services));
+  void app.register(async (instance) => registerProfileRoutes(instance, {
+    profiles: new ProfileService(new PostgresProfileRepository(services.database), new PostgresAuditRepository(services.database)),
+    sessions: new PostgresSessionRepository(services.database),
+    sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+  }));
 
   return { app, services };
 }

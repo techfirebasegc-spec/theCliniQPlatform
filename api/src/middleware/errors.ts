@@ -4,7 +4,8 @@ export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error: FastifyError, request, reply) => {
     const requestId = request.id;
     request.log.error({ err: error, requestId }, 'request failed');
-    const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    const profileCode = error.code === 'UNAUTHORIZED' ? 401 : error.code === 'FORBIDDEN' ? 403 : error.code === 'CONFLICT' ? 409 : undefined;
+    const statusCode = profileCode ?? (error.statusCode && error.statusCode >= 400 ? error.statusCode : 500);
     const message = statusCode >= 500 ? 'An unexpected error occurred.' : error.message;
     reply.status(statusCode).send({ error: { code: error.code || 'INTERNAL_ERROR', message, requestId } });
   });

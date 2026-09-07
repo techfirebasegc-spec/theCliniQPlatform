@@ -1,7 +1,7 @@
 import type { NewSession } from './session.js';
 
 export interface PostgresExecutor {
-  query<T extends Record<string, unknown>>(text: string, values: readonly unknown[]): Promise<{ rows: T[] }>;
+  query<T extends Record<string, unknown>>(text: string, values: readonly unknown[]): Promise<{ rows: T[]; rowCount?: number | null }>;
 }
 
 export class PostgresSessionRepository {
@@ -23,8 +23,9 @@ export class PostgresSessionRepository {
     return session ? { id: session.id, accountId: session.account_id, status: session.status, idleExpiresAt: session.idle_expires_at, absoluteExpiresAt: session.absolute_expires_at } : null;
   }
 
-  public async touch(sessionId: string, at: Date, idleExpiresAt: Date): Promise<void> {
-    await this.database.query('UPDATE sessions SET last_seen_at = $2, idle_expires_at = $3, updated_at = $2 WHERE id = $1 AND status = \'ACTIVE\'', [sessionId, at, idleExpiresAt]);
+  public async touch(sessionId: string, at: Date, idleExpiresAt: Date): Promise<{ updated: boolean }> {
+    const result = await this.database.query('UPDATE sessions SET last_seen_at = $2, idle_expires_at = $3, updated_at = $2 WHERE id = $1 AND status = \'ACTIVE\' AND idle_expires_at > $2 AND absolute_expires_at > $2', [sessionId, at, idleExpiresAt]);
+    return { updated: result.rowCount === 1 };
   }
 
   public async revoke(sessionId: string, accountId: string, reason: string, at: Date): Promise<void> {

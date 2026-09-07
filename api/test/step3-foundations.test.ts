@@ -101,7 +101,7 @@ describe('Step 3 foundations', () => {
     const created = createSession('account', { idleTtlSeconds: 60, absoluteTtlSeconds: 120 }, now);
     const base: StoredSession = { id: created.id, accountId: 'account', status: 'ACTIVE', idleExpiresAt: new Date('2026-01-01T00:01:00Z'), absoluteExpiresAt: new Date('2026-01-01T00:02:00Z') };
     const touches: Date[] = [];
-    const repository = { findBySecretHash: async () => base, touch: async (_id: string, _at: Date, expiresAt: Date) => { touches.push(expiresAt); } };
+    const repository = { findBySecretHash: async () => base, touch: async (_id: string, _at: Date, expiresAt: Date) => { touches.push(expiresAt); return { updated: true }; } };
     await expect(authenticateSession(sessionCookieValue(created), { idleTtlSeconds: 60, absoluteTtlSeconds: 120 }, repository, now)).resolves.toEqual(base);
     expect(touches).toHaveLength(1);
     await expect(authenticateSession(undefined, { idleTtlSeconds: 60, absoluteTtlSeconds: 120 }, repository, now)).rejects.toThrow('UNAUTHORIZED');
@@ -113,6 +113,27 @@ describe('Step 3 foundations', () => {
     await expect(authenticateSession(sessionCookieValue(created), { idleTtlSeconds: 60, absoluteTtlSeconds: 120 }, { ...repository, findBySecretHash: async () => ({ ...base, absoluteExpiresAt: now }) }, now)).rejects.toThrow('UNAUTHORIZED');
     await authenticateSession(sessionCookieValue(created), { idleTtlSeconds: 60, absoluteTtlSeconds: 120 }, { ...repository, findBySecretHash: async () => ({ ...base, idleExpiresAt: new Date('2026-01-01T00:02:00Z') }) }, new Date('2026-01-01T00:01:30Z'));
     expect(touches.at(-1)?.getTime()).toBe(base.absoluteExpiresAt.getTime());
+  });
+
+  it('fails closed when a conditional session touch loses a revoke, replacement, or expiry race', async () => {
+    const now = new Date('2026-01-01T00:00:00Z');
+    const created = createSession('account', { idleTtlSeconds: 60, absoluteTtlSeconds: 120 }, now);
+    const active: StoredSession = { id: created.id, accountId: 'account', status: 'ACTIVE', idleExpiresAt: new Date('2026-01-01T00:01:00Z'), absoluteExpiresAt: new Date('2026-01-01T00:02:00Z') };
+    for (const race of ['REVOKED', 'REPLACED', 'EXPIRED']) {
+      const repository = { findBySecretHash: async () => active, touch: async () => ({ updated: false }) };
+      await expect(authenticateSession(sessionCookieValue(created), { idleTtlSeconds: 60, absoluteTtlSeconds: 120 }, repository, now), race).rejects.toThrow('UNAUTHORIZED');
+    }
+  });
+
+  it('reports whether the conditional PostgreSQL touch updated a session', async () => {
+    const calls: { text: string; values: readonly unknown[] }[] = [];
+    const updated = new PostgresSessionRepository({ query: async (text, values) => { calls.push({ text, values }); return { rows: [], rowCount: 1 }; } });
+    await expect(updated.touch('session', new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:01:00Z'))).resolves.toEqual({ updated: true });
+    expect(calls[0]?.text).toContain("status = 'ACTIVE'");
+    expect(calls[0]?.text).toContain('idle_expires_at > $2');
+    expect(calls[0]?.text).toContain('absolute_expires_at > $2');
+    const unchanged = new PostgresSessionRepository({ query: async () => ({ rows: [], rowCount: 0 }) });
+    await expect(unchanged.touch('session', new Date(), new Date())).resolves.toEqual({ updated: false });
   });
 
   it('audits denials and cannot authorize if the audit write fails', async () => {
