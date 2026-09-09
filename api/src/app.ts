@@ -14,6 +14,9 @@ import { PostgresTenantRepository } from './modules/tenants/postgres-tenant-repo
 import { TenantClinicService } from './modules/tenants/tenants.js';
 import { PostgresMembershipRepository } from './modules/memberships/postgres-membership-repository.js';
 import { MembershipService, TenantContextService } from './modules/memberships/memberships.js';
+import { PostgresNetworkRepository } from './modules/network/postgres-network-repository.js';
+import { NetworkService } from './modules/network/network.js';
+import { registerNetworkRoutes } from './routes/network.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -45,6 +48,7 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   const context = new TenantContextService(memberships, audit);
   void app.register(async (instance) => registerClinicRoutes(instance, { clinics: new TenantClinicService(new PostgresTenantRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerMembershipRoutes(instance, { memberships: new MembershipService(memberships, context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
+  void app.register(async (instance) => registerNetworkRoutes(instance, { network: new NetworkService(new PostgresNetworkRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
 
   return { app, services };
 }

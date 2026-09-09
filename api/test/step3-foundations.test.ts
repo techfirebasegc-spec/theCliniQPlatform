@@ -82,6 +82,9 @@ describe('Step 3 foundations', () => {
     const admin = { ...staff, role: 'CLINIC_ADMIN' as const };
     expect(hasTenantPermission(owner, 'a', 'tenant-a', 'membership.manage')).toBe(true);
     expect(hasTenantPermission(admin, 'a', 'tenant-a', 'membership.manage')).toBe(true);
+    expect(hasTenantPermission(owner, 'a', 'tenant-a', 'network.manage')).toBe(true);
+    expect(hasTenantPermission(admin, 'a', 'tenant-a', 'network.manage')).toBe(true);
+    expect(hasTenantPermission(staff, 'a', 'tenant-a', 'network.manage')).toBe(false);
   });
 
   it('persists only a session hash and can revoke a server-side session', async () => {
