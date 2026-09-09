@@ -24,11 +24,45 @@ transaction and rolls back all fixture records.
 ## Recorded result
 
 Local application validation passed with 75 tests, lint, typecheck, build, and
-`git diff --check`. This Codex session did not have a `DATABASE_URL` configured
-for the authorized disposable DEV PostgreSQL database, so migration UP/DOWN and
-direct-SQL verification have not been executed from this workspace. The live
-result remains pending; it must not be substituted with a local, production, or
-application database.
+`git diff --check`.
+
+## Live DEV verification result
+
+Live verification is **COMPLETE**. It was performed only against the fresh
+disposable DEV PostgreSQL database
+`cliniq_phase5_service_offerings_verify`; no production database, application
+or business data, production payment provider, or Razorpay credential was
+used.
+
+- Migration UP succeeded through
+  `20260911000000_phase5_service_offerings`.
+- Schema verification passed for `service_offerings`,
+  `service_offering_versions`, and `service_offering_prices`: UUID primary
+  keys; explicit DoctorProfile/Clinic ownership foreign keys; exactly-one-owner
+  check; status, effective-range, currency, and integer-minor-unit checks;
+  version uniqueness; GiST effective-range no-overlap exclusion; and the
+  version/price immutability triggers.
+- Direct SQL verification passed: valid doctor-owned and clinic-owned offerings
+  were accepted; both-owner, neither-owner, and invalid-owner-FK rows were
+  rejected; overlapping effective versions were rejected; adjacent half-open
+  ranges were accepted; and historical pricing remained readable.
+- Direct version UPDATE/DELETE and direct price UPDATE/DELETE were rejected by
+  the immutability protections.
+- The official
+  `phase5-service-offerings-foundation-verification.sql` fixture passed all
+  checks, including schema presence, ownership-shape rejection, invalid FK,
+  overlap, immutability, readable historical price, and rollback. Its fixture
+  data was rolled back completely.
+- Targeted DOWN for `20260911000000_phase5_service_offerings` succeeded. It
+  removed only the three Service Offering tables and their immutability
+  triggers/functions.
+- Post-DOWN verification found 38 remaining tables. Phase 2 remained intact,
+  including `accounts`, `doctor_profiles`, `clinics`, `tenants`,
+  `network_connections`, and `tenant_memberships`. Phase 4 remained intact,
+  including `commercial_rules`, `financial_allocation_snapshots`,
+  `payment_intents`, `payments`, `refunds`, `settlements`,
+  `ledger_transactions`, `ledger_entries`, `reconciliation_records`, and
+  `provider_webhook_events`; `pgmigrations` also remained.
 
 No production database, payment provider, Razorpay credential, booking, or
 financial transaction is part of this verification.
