@@ -42,13 +42,24 @@ describe.skipIf(!databaseUrl)('theCliniQ Phase 5 Step 5.1 real PostgreSQL Appoin
     expect(concurrent.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(concurrent.filter((result) => result.status === 'rejected')).toHaveLength(1);
     const persisted = await poolA!.query<{ count: string; status: string }>("SELECT count(*)::text AS count,max(status) AS status FROM appointments WHERE appointment_intent_id=$1", [fixture.intent]);
-    expect(persisted.rows[0]).toEqual({ count: '1', status: 'CONFIRMED' });
+    expect(persisted.rows[0]).toEqual({ count: '1', status: 'PAYMENT_PENDING' });
 
     const stored = await poolA!.query<{ id: string }>('SELECT id FROM appointments WHERE appointment_intent_id=$1', [fixture.intent]);
     const appointment = stored.rows[0]?.id;
     if (!appointment) throw new Error('Expected persisted Appointment.');
     const event = randomUUID();
-    await poolA!.query("INSERT INTO appointment_events (id,appointment_id,event_type,resulting_status) VALUES ($1,$2,'CONFIRMED','CONFIRMED')", [event, appointment]);
+    const transitionClient = await poolA!.connect();
+    try {
+      await transitionClient.query('BEGIN');
+      await transitionClient.query("UPDATE appointments SET status='CONFIRMED' WHERE id=$1", [appointment]);
+      await transitionClient.query("INSERT INTO appointment_events (id,appointment_id,event_type,previous_status,resulting_status) VALUES ($1,$2,'CONFIRMED','PAYMENT_PENDING','CONFIRMED')", [event, appointment]);
+      await transitionClient.query('COMMIT');
+    } catch (error) {
+      await transitionClient.query('ROLLBACK');
+      throw error;
+    } finally {
+      transitionClient.release();
+    }
     await expect(poolA!.query("UPDATE appointment_events SET reason='rewrite' WHERE id=$1", [event])).rejects.toMatchObject({ code: 'P0001' });
     await expect(poolA!.query('DELETE FROM appointment_events WHERE id=$1', [event])).rejects.toMatchObject({ code: 'P0001' });
     await expect(poolA!.query("UPDATE appointments SET status='COMPLETED' WHERE id=$1", [appointment])).rejects.toMatchObject({ code: 'P0001' });
@@ -59,7 +70,7 @@ describe.skipIf(!databaseUrl)('theCliniQ Phase 5 Step 5.1 real PostgreSQL Appoin
 function appointmentInsert() {
   return `INSERT INTO appointments
     (id,appointment_intent_id,slot_reservation_id,appointment_financial_handoff_id,financial_allocation_snapshot_id,payment_intent_id,patient_account_id,booking_actor_account_id,booking_tenant_id,provider_doctor_profile_id,provider_clinic_id,service_exposure_id,service_offering_id,service_offering_version_id,service_offering_price_id,currency,price_amount_minor,provider_timezone,requested_local_at,starts_at,ends_at,service_duration_seconds,buffer_before_seconds,buffer_after_seconds,hold_seconds,status)
-    SELECT $1::uuid,intent.id,reservation.id,handoff.id,handoff.financial_allocation_snapshot_id,handoff.payment_intent_id,intent.patient_account_id,intent.booking_actor_account_id,intent.booking_tenant_id,intent.provider_doctor_profile_id,intent.provider_clinic_id,intent.service_exposure_id,intent.service_offering_id,intent.service_offering_version_id,intent.service_offering_price_id,intent.currency,intent.price_amount_minor,intent.provider_timezone,intent.requested_local_at,intent.starts_at,intent.ends_at,intent.service_duration_seconds,intent.buffer_before_seconds,intent.buffer_after_seconds,intent.hold_seconds,'CONFIRMED'
+    SELECT $1::uuid,intent.id,reservation.id,handoff.id,handoff.financial_allocation_snapshot_id,handoff.payment_intent_id,intent.patient_account_id,intent.booking_actor_account_id,intent.booking_tenant_id,intent.provider_doctor_profile_id,intent.provider_clinic_id,intent.service_exposure_id,intent.service_offering_id,intent.service_offering_version_id,intent.service_offering_price_id,intent.currency,intent.price_amount_minor,intent.provider_timezone,intent.requested_local_at,intent.starts_at,intent.ends_at,intent.service_duration_seconds,intent.buffer_before_seconds,intent.buffer_after_seconds,intent.hold_seconds,'PAYMENT_PENDING'
     FROM appointment_intents intent
     JOIN slot_reservations reservation ON reservation.id=$3::uuid AND reservation.appointment_intent_id=intent.id
     JOIN appointment_financial_handoffs handoff ON handoff.appointment_intent_id=intent.id

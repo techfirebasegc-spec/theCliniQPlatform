@@ -15,8 +15,24 @@ state/timestamps. Immutable events include payment-confirmed, started,
 completed, cancelled, reschedule-requested, rescheduled, reconciliation-required
 and controlled-support-exception with actor, reason and audit linkage.
 
-Database/application guards allow `CONFIRMED → IN_PROGRESS → COMPLETED` and
-approved exceptional paths only. Terminal records cannot reactivate.
+Step 5.2 adds only the typed internal transition foundation. Its exact
+database/application matrix is `PAYMENT_PENDING → CONFIRMED`,
+`PAYMENT_PENDING → PAYMENT_FAILED`, `PAYMENT_PENDING → EXPIRED`,
+`CONFIRMED → IN_PROGRESS`, `CONFIRMED → CANCELLED`,
+`IN_PROGRESS → COMPLETED`, and `IN_PROGRESS → CANCELLED`. Every successful
+transition updates the Appointment and inserts exactly one immutable
+Appointment Event, linked to its distinct business Audit Event, in one
+PostgreSQL transaction. The transition service locks only the Appointment and
+uses compare-and-set status writes; when a future operation also needs booking
+state, it preserves `Intent → Reservation → Appointment`. Terminal records
+cannot reactivate.
+
+This is not a generic status API. The service receives a typed internal action
+and actor/context for future workflow authorization. It deliberately does not
+perform provider confirmation, cancellation/refund, start/completion
+authorization, rescheduling, external calls, financial writes, or a new
+idempotency scheme. Exact replay remains a future workflow/API concern because
+the current immutable event schema has no correlation identifier.
 
 ### Operation, lock, and external-call boundaries
 

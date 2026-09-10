@@ -1,6 +1,6 @@
 import type { PostgresExecutor } from '../sessions/postgres-session-repository.js';
 
-export type AppointmentStatus = 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED' | 'PAYMENT_FAILED';
+export type AppointmentStatus = 'PAYMENT_PENDING' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED' | 'PAYMENT_FAILED';
 export type AppointmentEventType = 'CONFIRMED' | 'STARTED' | 'COMPLETED' | 'CANCELLED' | 'RESCHEDULE_REQUESTED' | 'RESCHEDULED' | 'EXPIRED' | 'PAYMENT_FAILED' | 'SUPPORT_EXCEPTION';
 
 export interface AppointmentLifecycleContext {
@@ -26,6 +26,7 @@ export class AppointmentFoundationService {
 }
 
 export function canTransitionAppointment(from: AppointmentStatus, to: AppointmentStatus): boolean {
-  return (from === 'CONFIRMED' && (to === 'IN_PROGRESS' || to === 'CANCELLED'))
+  return (from === 'PAYMENT_PENDING' && (to === 'CONFIRMED' || to === 'PAYMENT_FAILED' || to === 'EXPIRED'))
+    || (from === 'CONFIRMED' && (to === 'IN_PROGRESS' || to === 'CANCELLED'))
     || (from === 'IN_PROGRESS' && (to === 'COMPLETED' || to === 'CANCELLED'));
 }

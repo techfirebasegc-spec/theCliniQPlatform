@@ -5,7 +5,7 @@
 | ID | Status | Decision |
 |---|---|---|
 | P5-AL-01 | APPROVED | `PAYMENT_PENDING → CONFIRMED` requires authoritative, verified Razorpay success/capture reconciled to the internal payment intent. Unknown, delayed, conflicting, incomplete, or client facts go to reconciliation; payment success is not completion. |
-| P5-AL-02 | APPROVED | Persistent Appointment states: `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`; terminal outcomes: `PAYMENT_FAILED`, `EXPIRED`, `CANCELLED`. `RESCHEDULED` is an immutable event, never a state. |
+| P5-AL-02 | APPROVED | Persistent Appointment states: `PAYMENT_PENDING`, `CONFIRMED`, `IN_PROGRESS`, `COMPLETED`; terminal outcomes: `PAYMENT_FAILED`, `EXPIRED`, `CANCELLED`. `RESCHEDULED` is an immutable event, never a state. |
 | P5-AL-03 | APPROVED | Doctor starts after the scheduled window begins. Patient and Clinic Staff have no default start authority; clinic workflow only if explicitly supported; Support/Admin only controlled exception. |
 | P5-AL-04 | APPROVED | Doctor completes; Clinic Owner/Admin completes clinic-owned appointments. Patient/Clinic Staff cannot by default. Completion is audited, concurrency-safe, settlement-eligible, and normally blocks cancellation/reschedule. |
 | P5-AL-05 | APPROVED | Patient, participating doctor, and Clinic Owner/Admin for clinic-owned appointments may cancel under versioned policy. Original allocation is immutable; refund/adjustment records compensate and actors cannot choose amounts. |
@@ -22,9 +22,23 @@ price, booking context, local/UTC window, reservation, handoff, allocation and
 payment evidence. Context alone grants no authority. Future chat, prescriptions,
 and files require Appointment participation plus their own consent policies.
 
-Allowed operational transitions are `CONFIRMED → IN_PROGRESS → COMPLETED`;
-direct/reverse/terminal reactivation is forbidden. Confirmation, start,
-completion, cancellation and reschedule are transactional and audited.
+## Step 5.2 state-transition foundation
+
+The typed internal transition boundary, rather than any client-supplied target
+state, permits exactly: `PAYMENT_PENDING → CONFIRMED`,
+`PAYMENT_PENDING → PAYMENT_FAILED`, `PAYMENT_PENDING → EXPIRED`,
+`CONFIRMED → IN_PROGRESS`, `CONFIRMED → CANCELLED`,
+`IN_PROGRESS → COMPLETED`, and `IN_PROGRESS → CANCELLED`. Terminal states
+cannot reactivate. Each successful transition writes one append-only
+Appointment Event in the same PostgreSQL transaction; stale and invalid calls
+write neither state nor event.
+
+The Step 5.2 service locks the Appointment row and uses compare-and-set state
+updates. It accepts a typed internal actor/context for later workflow-specific
+authorization, but does not itself add provider confirmation, cancellation,
+start, completion, or reschedule authorization workflows. Exact-replay
+idempotency remains owned by those future workflow/API boundaries because the
+existing event schema has no workflow correlation identity.
 
 ## Deferred, non-blocking decisions
 
