@@ -17,7 +17,7 @@ export type BookableService = {
 export type AppointmentIntent = {
   id: string; patientAccountId: string; bookingActorAccountId: string; bookingTenantId: string | null; serviceExposureId: string | null; provider: ProviderInput; serviceOfferingId: string; serviceOfferingVersionId: string;
   serviceOfferingPriceId: string; currency: string; priceAmountMinor: bigint; providerTimezone: string; requestedLocalAt: string; startsAt: Date; endsAt: Date;
-  serviceDurationSeconds: number; bufferBeforeSeconds: number; bufferAfterSeconds: number; holdSeconds: number; state: 'APPOINTMENT_INTENT' | 'SLOT_RESERVED' | 'EXPIRED' | 'CANCELLED';
+  serviceDurationSeconds: number; bufferBeforeSeconds: number; bufferAfterSeconds: number; holdSeconds: number; bookingRelationship: 'PATIENT_PROVIDER' | 'CLINIC_DOCTOR'; state: 'APPOINTMENT_INTENT' | 'SLOT_RESERVED' | 'PAYMENT_PENDING' | 'EXPIRED' | 'CANCELLED';
   idempotencyKey: string; requestFingerprint: string; expiresAt: Date;
 };
 export type SlotReservation = { id: string; appointmentIntentId: string; serviceOfferingVersionId: string; provider: ProviderInput; startsAt: Date; endsAt: Date; capacityUnits: number; status: 'HELD' | 'RELEASED' | 'EXPIRED'; expiresAt: Date; releasedAt: Date | null; expiredAt: Date | null };
@@ -37,6 +37,7 @@ export interface AppointmentRepository {
   activeCapacityUnits(database: PostgresExecutor, versionId: string, startsAt: Date, endsAt: Date): Promise<number>;
   createReservation(database: PostgresExecutor, reservation: SlotReservation): Promise<void>;
   transitionIntent(database: PostgresExecutor, intentId: string, from: AppointmentIntent['state'], to: AppointmentIntent['state'], at: Date): Promise<boolean>;
+  findReservationIntentId(reservationId: string): Promise<string | null>;
   lockReservation(database: PostgresExecutor, reservationId: string): Promise<SlotReservation | null>;
   releaseReservation(database: PostgresExecutor, reservationId: string, at: Date): Promise<boolean>;
   expireReservation(database: PostgresExecutor, reservationId: string, at: Date): Promise<boolean>;
@@ -63,7 +64,7 @@ export class AppointmentService {
         if (!bookable || bookable.serviceOfferingId !== exposure.serviceOfferingId || !sameProvider(bookable.provider, exposure.provider)) return this.denied(actor, 'SERVICE_EXPOSURE', input.serviceExposureId);
         const resolvedStart = localToUtcEarlier(input.requestedLocalAt, bookable.timezone);
         const { startsAt, endsAt } = validateBookable(bookable, input.requestedLocalAt, resolvedStart, now);
-        const intent: AppointmentIntent = { id: createIdentifier(), patientAccountId: actor, bookingActorAccountId: actor, bookingTenantId: bookable.bookingTenantId, serviceExposureId: exposure.id, provider: bookable.provider, serviceOfferingId: bookable.serviceOfferingId, serviceOfferingVersionId: bookable.versionId, serviceOfferingPriceId: bookable.priceId, currency: bookable.currency, priceAmountMinor: bookable.priceAmountMinor, providerTimezone: bookable.timezone, requestedLocalAt: input.requestedLocalAt, startsAt, endsAt, serviceDurationSeconds: bookable.durationSeconds, bufferBeforeSeconds: bookable.bufferBeforeSeconds, bufferAfterSeconds: bookable.bufferAfterSeconds, holdSeconds: bookable.holdSeconds, state: 'APPOINTMENT_INTENT', idempotencyKey: input.idempotencyKey, requestFingerprint: fingerprint, expiresAt: new Date(now.getTime() + bookable.holdSeconds * 1_000) };
+        const intent: AppointmentIntent = { id: createIdentifier(), patientAccountId: actor, bookingActorAccountId: actor, bookingTenantId: bookable.bookingTenantId, serviceExposureId: exposure.id, provider: bookable.provider, serviceOfferingId: bookable.serviceOfferingId, serviceOfferingVersionId: bookable.versionId, serviceOfferingPriceId: bookable.priceId, currency: bookable.currency, priceAmountMinor: bookable.priceAmountMinor, providerTimezone: bookable.timezone, requestedLocalAt: input.requestedLocalAt, startsAt, endsAt, serviceDurationSeconds: bookable.durationSeconds, bufferBeforeSeconds: bookable.bufferBeforeSeconds, bufferAfterSeconds: bookable.bufferAfterSeconds, holdSeconds: bookable.holdSeconds, bookingRelationship: 'PATIENT_PROVIDER', state: 'APPOINTMENT_INTENT', idempotencyKey: input.idempotencyKey, requestFingerprint: fingerprint, expiresAt: new Date(now.getTime() + bookable.holdSeconds * 1_000) };
         await this.repository.createIntent(database, intent);
         await this.repository.appendAudit(database, success('APPOINTMENT_INTENT_CREATED', actor, intent.id));
         return intent;
@@ -106,11 +107,13 @@ export class AppointmentService {
 
   public async release(accountId: string | undefined, reservationId: string): Promise<void> {
     const actor = this.requireAccount(accountId);
+    const intentId = await this.repository.findReservationIntentId(reservationId);
     await this.repository.transaction(async (database) => {
-      const reservation = await this.repository.lockReservation(database, reservationId);
-      const intent = reservation && await this.repository.lockIntent(database, reservation.appointmentIntentId);
-      if (!reservation || !intent || intent.patientAccountId !== actor || intent.bookingActorAccountId !== actor) return this.denied(actor, 'SLOT_RESERVATION', reservationId);
+      const intent = intentId && await this.repository.lockIntent(database, intentId);
+      const reservation = intent && await this.repository.lockReservation(database, reservationId);
+      if (!reservation || !intent || reservation.appointmentIntentId !== intent.id || intent.patientAccountId !== actor || intent.bookingActorAccountId !== actor) return this.denied(actor, 'SLOT_RESERVATION', reservationId);
       if (!await this.repository.activePatient(database, actor)) return this.denied(actor, 'PATIENT_PROFILE', actor);
+      if (intent.state !== 'SLOT_RESERVED') return this.conflict(actor, 'SLOT_RESERVATION', reservationId);
       if (reservation.status !== 'HELD') return this.conflict(actor, 'SLOT_RESERVATION', reservationId);
       const now = this.now();
       if (reservation.expiresAt <= now) {
@@ -126,13 +129,15 @@ export class AppointmentService {
 
   /** Internal deterministic cleanup hook for a future worker; it is intentionally not an HTTP route. */
   public async expire(reservationId: string): Promise<boolean> {
+    const intentId = await this.repository.findReservationIntentId(reservationId);
+    if (!intentId) return false;
     return this.repository.transaction(async (database) => {
+      const intent = await this.repository.lockIntent(database, intentId);
       const reservation = await this.repository.lockReservation(database, reservationId);
       const now = this.now();
       if (!reservation || reservation.status !== 'HELD' || reservation.expiresAt > now) return false;
-      const intent = await this.repository.lockIntent(database, reservation.appointmentIntentId);
-      if (!intent || !await this.repository.expireReservation(database, reservation.id, now)) return false;
-      await this.repository.transitionIntent(database, intent.id, 'SLOT_RESERVED', 'EXPIRED', now);
+      if (!intent || reservation.appointmentIntentId !== intent.id || !await this.repository.expireReservation(database, reservation.id, now)) return false;
+      if (intent.state === 'SLOT_RESERVED' || intent.state === 'PAYMENT_PENDING') await this.repository.transitionIntent(database, intent.id, intent.state, 'EXPIRED', now);
       await this.repository.appendAudit(database, success('SLOT_RESERVATION_EXPIRED', undefined, reservation.id));
       return true;
     });

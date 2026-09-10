@@ -7,6 +7,7 @@ const environmentSchema = z.object({
   DATABASE_URL: z.url().startsWith('postgresql://'),
   REDIS_URL: z.url().startsWith('redis://'),
   FIREBASE_PROJECT_ID: z.string().trim().min(1),
+  PAYMENT_PROVIDER_KEY: z.string().trim().min(1),
   SESSION_IDLE_TTL_SECONDS: z.coerce.number().int().positive(),
   SESSION_ABSOLUTE_TTL_SECONDS: z.coerce.number().int().positive(),
 }).refine((environment) => environment.SESSION_ABSOLUTE_TTL_SECONDS >= environment.SESSION_IDLE_TTL_SECONDS, {

@@ -29,6 +29,9 @@ import { registerAppointmentIntentRoutes } from './routes/appointment-intents.js
 import { registerServiceExposureRoutes } from './routes/service-exposures.js';
 import { PostgresServiceExposureRepository } from './modules/service-exposures/postgres-service-exposure-repository.js';
 import { ServiceExposureService } from './modules/service-exposures/service-exposures.js';
+import { PaymentHandoffService } from './modules/appointments/payment-handoffs.js';
+import { PostgresPaymentHandoffRepository } from './modules/appointments/postgres-payment-handoff-repository.js';
+import { resolvePaymentProviderKey } from './modules/financial/provider-registry.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -64,7 +67,7 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   void app.register(async (instance) => registerServiceOfferingRoutes(instance, { offerings: new ServiceOfferingService(new PostgresServiceOfferingRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerAvailabilityRoutes(instance, { availability: new AvailabilityService(new PostgresAvailabilityRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerServiceExposureRoutes(instance, { exposures: new ServiceExposureService(new PostgresServiceExposureRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
-  void app.register(async (instance) => registerAppointmentIntentRoutes(instance, { appointments: new AppointmentService(new PostgresAppointmentRepository(services.database), audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
+  void app.register(async (instance) => registerAppointmentIntentRoutes(instance, { appointments: new AppointmentService(new PostgresAppointmentRepository(services.database), audit), handoffs: new PaymentHandoffService(new PostgresPaymentHandoffRepository(services.database), resolvePaymentProviderKey(environment.PAYMENT_PROVIDER_KEY)), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
 
   return { app, services };
 }

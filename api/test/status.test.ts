@@ -8,6 +8,10 @@ const environment: Environment = {
   WEB_URL: 'http://localhost:3000',
   DATABASE_URL: 'postgresql://cliniq:cliniq@127.0.0.1:5432/cliniq_platform',
   REDIS_URL: 'redis://127.0.0.1:6379',
+  FIREBASE_PROJECT_ID: 'test-project',
+  PAYMENT_PROVIDER_KEY: 'RAZORPAY',
+  SESSION_IDLE_TTL_SECONDS: 600,
+  SESSION_ABSOLUTE_TTL_SECONDS: 3600,
 };
 
 describe('status routes', () => {
