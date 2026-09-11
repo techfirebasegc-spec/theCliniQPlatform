@@ -1,9 +1,9 @@
 export type TenantRole = 'CLINIC_OWNER' | 'CLINIC_ADMIN' | 'CLINIC_STAFF' | 'DOCTOR' | 'PATIENT';
-export type TenantPermission = 'tenant.context.use' | 'tenant.view' | 'clinic.view' | 'clinic.manage' | 'membership.view' | 'membership.invite' | 'membership.manage' | 'network.manage';
+export type TenantPermission = 'tenant.context.use' | 'tenant.view' | 'clinic.view' | 'clinic.manage' | 'membership.view' | 'membership.invite' | 'membership.manage' | 'network.manage' | 'appointment.view' | 'appointment.start' | 'appointment.complete' | 'appointment.cancel';
 
 const permissionBundles: Record<TenantRole, readonly TenantPermission[]> = {
-  CLINIC_OWNER: ['tenant.context.use', 'tenant.view', 'clinic.view', 'clinic.manage', 'membership.view', 'membership.invite', 'membership.manage', 'network.manage'],
-  CLINIC_ADMIN: ['tenant.context.use', 'tenant.view', 'clinic.view', 'clinic.manage', 'membership.view', 'membership.invite', 'membership.manage', 'network.manage'],
+  CLINIC_OWNER: ['tenant.context.use', 'tenant.view', 'clinic.view', 'clinic.manage', 'membership.view', 'membership.invite', 'membership.manage', 'network.manage', 'appointment.view', 'appointment.complete', 'appointment.cancel'],
+  CLINIC_ADMIN: ['tenant.context.use', 'tenant.view', 'clinic.view', 'clinic.manage', 'membership.view', 'membership.invite', 'membership.manage', 'network.manage', 'appointment.view', 'appointment.complete', 'appointment.cancel'],
   CLINIC_STAFF: ['tenant.context.use', 'tenant.view', 'clinic.view'],
   DOCTOR: ['tenant.context.use', 'tenant.view', 'clinic.view'],
   PATIENT: ['tenant.context.use', 'tenant.view', 'clinic.view'],

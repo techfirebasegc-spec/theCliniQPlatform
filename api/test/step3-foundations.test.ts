@@ -85,6 +85,10 @@ describe('Step 3 foundations', () => {
     expect(hasTenantPermission(owner, 'a', 'tenant-a', 'network.manage')).toBe(true);
     expect(hasTenantPermission(admin, 'a', 'tenant-a', 'network.manage')).toBe(true);
     expect(hasTenantPermission(staff, 'a', 'tenant-a', 'network.manage')).toBe(false);
+    expect(hasTenantPermission(owner, 'a', 'tenant-a', 'appointment.complete')).toBe(true);
+    expect(hasTenantPermission(admin, 'a', 'tenant-a', 'appointment.cancel')).toBe(true);
+    expect(hasTenantPermission(staff, 'a', 'tenant-a', 'appointment.view')).toBe(false);
+    expect(hasTenantPermission(staff, 'a', 'tenant-a', 'appointment.start')).toBe(false);
   });
 
   it('persists only a session hash and can revoke a server-side session', async () => {

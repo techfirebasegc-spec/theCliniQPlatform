@@ -51,6 +51,7 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
       const moved = await db.query("UPDATE payment_intents SET status='SUCCEEDED',updated_at=current_timestamp WHERE id=$1 AND status='PENDING_PROVIDER'", [context.paymentIntentId]);
       if (moved.rowCount !== 1) return this.reconcile(db, event.id, providerKey, context.paymentIntentId, 'PAYMENT_STATE_CONFLICT');
       const appointmentId = await this.appointment(db, context);
+      if (!context.appointmentId) await this.createParticipants(db, appointmentId, context.intentId);
       const transitioned = await db.query("UPDATE appointments SET status='CONFIRMED' WHERE id=$1 AND status='PAYMENT_PENDING'", [appointmentId]);
       if (transitioned.rowCount !== 1) return this.reconcile(db, event.id, providerKey, context.paymentIntentId, 'APPOINTMENT_STATE_CONFLICT');
       const auditId = createIdentifier();
@@ -76,6 +77,22 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
   private async appointment(db: PostgresExecutor, c: Context): Promise<string> { if (c.appointmentId) return c.appointmentId; const id=createIdentifier(); await db.query(`INSERT INTO appointments (id,appointment_intent_id,slot_reservation_id,appointment_financial_handoff_id,financial_allocation_snapshot_id,payment_intent_id,patient_account_id,booking_actor_account_id,booking_tenant_id,provider_doctor_profile_id,provider_clinic_id,service_exposure_id,service_offering_id,service_offering_version_id,service_offering_price_id,currency,price_amount_minor,provider_timezone,requested_local_at,starts_at,ends_at,service_duration_seconds,buffer_before_seconds,buffer_after_seconds,hold_seconds,status)
     SELECT $1,intent.id,reservation.id,handoff.id,handoff.financial_allocation_snapshot_id,payment.id,intent.patient_account_id,intent.booking_actor_account_id,intent.booking_tenant_id,intent.provider_doctor_profile_id,intent.provider_clinic_id,intent.service_exposure_id,intent.service_offering_id,intent.service_offering_version_id,intent.service_offering_price_id,intent.currency,intent.price_amount_minor,intent.provider_timezone,intent.requested_local_at,intent.starts_at,intent.ends_at,intent.service_duration_seconds,intent.buffer_before_seconds,intent.buffer_after_seconds,intent.hold_seconds,'PAYMENT_PENDING'
     FROM appointment_intents intent JOIN slot_reservations reservation ON reservation.appointment_intent_id=intent.id JOIN appointment_financial_handoffs handoff ON handoff.appointment_intent_id=intent.id JOIN payment_intents payment ON payment.id=handoff.payment_intent_id WHERE intent.id=$2`,[id,c.intentId]); return id; }
+  /** Inserts immutable, context-derived evidence within the existing confirmation transaction. */
+  private async createParticipants(db: PostgresExecutor, appointmentId: string, intentId: string): Promise<void> {
+    const patient = await db.query(`INSERT INTO appointment_participants (id,appointment_id,participant_type,patient_profile_id)
+      SELECT $1,$2,'PATIENT',profile.id FROM appointment_intents intent
+      JOIN patient_profiles profile ON profile.account_id=intent.patient_account_id
+      WHERE intent.id=$3`, [createIdentifier(), appointmentId, intentId]);
+    if (patient.rowCount !== 1) throw new Error('appointment patient participant context is missing');
+    const doctor = await db.query(`INSERT INTO appointment_participants (id,appointment_id,participant_type,doctor_profile_id)
+      SELECT $1,$2,'DOCTOR',intent.provider_doctor_profile_id FROM appointment_intents intent
+      WHERE intent.id=$3 AND intent.provider_doctor_profile_id IS NOT NULL`, [createIdentifier(), appointmentId, intentId]);
+    const clinic = await db.query(`INSERT INTO appointment_participants (id,appointment_id,participant_type,clinic_id,tenant_id)
+      SELECT $1,$2,'CLINIC',clinic.id,clinic.tenant_id FROM appointment_intents intent
+      JOIN clinics clinic ON clinic.id=intent.provider_clinic_id
+      WHERE intent.id=$3 AND intent.provider_clinic_id IS NOT NULL`, [createIdentifier(), appointmentId, intentId]);
+    if ((doctor.rowCount ?? 0) + (clinic.rowCount ?? 0) !== 1) throw new Error('appointment provider participant context is missing');
+  }
   private async processing(db: PostgresExecutor,id:string){ await db.query("UPDATE provider_webhook_events SET status='PROCESSING',processing_started_at=current_timestamp WHERE id=$1 AND status='PERSISTED'",[id]); }
   private async process(db: PostgresExecutor,id:string){ await db.query("UPDATE provider_webhook_events SET status='PROCESSED',processed_at=current_timestamp WHERE id=$1 AND status='PROCESSING'",[id]); }
   private async reconcile(db: PostgresExecutor,eventId:string,key:string,paymentIntentId:string|null,reason:string):Promise<{status:'RECONCILIATION_REQUIRED'}>{ await this.processing(db,eventId); await db.query("UPDATE provider_webhook_events SET status='RECONCILIATION_REQUIRED',reconciliation_required_at=current_timestamp WHERE id=$1 AND status='PROCESSING'",[eventId]); if(paymentIntentId) await db.query("UPDATE payment_intents SET status='RECONCILIATION_REQUIRED',reconciliation_required_at=current_timestamp WHERE id=$1 AND status='PENDING_PROVIDER'",[paymentIntentId]); await db.query(`INSERT INTO reconciliation_records (id,status,provider_key,provider_webhook_event_id,internal_entity_type,internal_entity_id,discrepancy_data) VALUES ($1,'MANUAL_REVIEW',$2,$3,'PAYMENT_INTENT',$4,$5::jsonb)`,[createIdentifier(),key,eventId,paymentIntentId,JSON.stringify({reason})]); return {status:'RECONCILIATION_REQUIRED'}; }
