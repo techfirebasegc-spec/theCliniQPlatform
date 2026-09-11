@@ -58,7 +58,7 @@ export class PostgresAppointmentRepository implements AppointmentRepository {
     if (expired.rowCount !== 1) return false;
     await database.query(`UPDATE payment_intents payment SET status='EXPIRED', updated_at=$2
       FROM appointment_financial_handoffs handoff
-      WHERE handoff.slot_reservation_id=$1 AND payment.id=handoff.payment_intent_id AND payment.status='CREATED'`, [id, at]);
+      WHERE handoff.slot_reservation_id=$1 AND payment.id=handoff.payment_intent_id AND payment.status IN ('CREATED','PENDING_PROVIDER')`, [id, at]);
     return true;
   }
   public async appendAudit(database: PostgresExecutor, event: AuditEventInput) { await database.query('INSERT INTO audit_events (id,category,event_type,actor_account_id,tenant_id,target_type,target_id,outcome,metadata) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [createIdentifier(),event.category,event.eventType,event.actorAccountId ?? null,event.tenantId ?? null,event.targetType,event.targetId ?? null,event.outcome,event.metadata ?? {}]); }

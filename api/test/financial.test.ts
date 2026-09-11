@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { evaluateCommercialRule, type CommercialRuleVersion } from '../src/modules/financial/commercial.js';
 import { FinancialError, FinancialService, type FinancialAdjustment, type FinancialRepository, type PaymentIntent, type PaymentIntentStatus, type WebhookEvent, type WebhookStatus } from '../src/modules/financial/financial.js';
 import { money } from '../src/modules/financial/money.js';
-import { ProviderOperationUnavailable, RazorpayPaymentProvider } from '../src/modules/financial/provider.js';
+import { RazorpayPaymentProvider } from '../src/modules/financial/provider.js';
 import { reconcile } from '../src/modules/financial/reconciliation.js';
 import { assertBalancedLedger } from '../src/modules/financial/ledger.js';
 import { retentionAction } from '../src/modules/financial/retention.js';
@@ -59,10 +59,9 @@ describe('theCliniQ Phase 4 financial foundation', () => {
     await expect(service.transitionWebhook('system', event.id, 'PROCESSED', 'PROCESSING')).rejects.toBeInstanceOf(FinancialError); expect(repository.webhooks.size).toBe(2);
   });
   it('validates the Razorpay signature through a server-only provider boundary', async () => {
-    const provider = new RazorpayPaymentProvider('server-only-secret'); const payload = '{"id":"evt"}';
+    const provider = new RazorpayPaymentProvider('server-key-id', 'server-key-secret', 'server-only-secret'); const payload = '{"id":"evt"}';
     const signature = createHmac('sha256', 'server-only-secret').update(payload).digest('hex');
     expect(provider.verifyWebhook({ payload, signature })).toBe(true); expect(provider.verifyWebhook({ payload, signature: '' })).toBe(false);
-    await expect(provider.createOrder({ idempotencyKey: 'idempotency', amountMinor: 1n, currency: 'INR' })).rejects.toBeInstanceOf(ProviderOperationUnavailable);
   });
   it('requires a second account to approve an adjustment and audits denials', async () => {
     const { service, audit } = setup(); const adjustment = await service.requestAdjustment({ allocationSnapshotId: 'snapshot', requestedByAccountId: 'requester', amountMinor: -100n, category: 'FEE_CORRECTION', component: 'PLATFORM_COMMISSION', reason: 'approved correction', reference: 'case' });
