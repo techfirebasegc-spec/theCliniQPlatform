@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { AppointmentError, type AppointmentIntentInput, type AppointmentService } from '../modules/appointments/appointments.js';
 import { type PaymentHandoffInput, type PaymentHandoffService } from '../modules/appointments/payment-handoffs.js';
-import type { PaymentOrderProvisioningService } from '../modules/appointments/payment-order-provisioning.js';
+import { PaymentOrderProvisioningError, type PaymentOrderProvisioningService } from '../modules/appointments/payment-order-provisioning.js';
 import { authenticateSession, sessionCookieName, type SessionAuthenticatorRepository, type SessionPolicy } from '../modules/sessions/session.js';
 
 export async function registerAppointmentIntentRoutes(app: FastifyInstance, dependencies: { appointments: AppointmentService; handoffs?: PaymentHandoffService; provisioning?: PaymentOrderProvisioningService; sessions: SessionAuthenticatorRepository; sessionPolicy: SessionPolicy }): Promise<void> {
@@ -13,8 +13,13 @@ export async function registerAppointmentIntentRoutes(app: FastifyInstance, depe
     return reply.code(result.replayed ? 200 : 201).send(result);
   });
   if (dependencies.provisioning) app.post('/v1/appointment-intents/:intentId/payment-order', async (request, reply) => {
-    const result = await dependencies.provisioning!.provision(await account(request.headers.cookie, dependencies), (request.params as { intentId: string }).intentId);
-    return reply.code(result.state === 'PROCESSING' ? 202 : 200).send(result);
+    try {
+      const result = await dependencies.provisioning!.provision(await account(request.headers.cookie, dependencies), (request.params as { intentId: string }).intentId);
+      return reply.code(result.state === 'PROCESSING' ? 202 : 200).send(result);
+    } catch (error) {
+      if (error instanceof PaymentOrderProvisioningError && error.code === 'PROVIDER_NOT_CONFIGURED') return reply.code(503).send({ error: { code: error.code, message: 'Payment provider is not configured.' } });
+      throw error;
+    }
   });
 }
 

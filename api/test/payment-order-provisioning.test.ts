@@ -4,6 +4,17 @@ import { PaymentConfirmationService } from '../src/modules/appointments/payment-
 import { PaymentOrderProvisioningService, providerReceipt, type PaymentOrderProvisioningRepository } from '../src/modules/appointments/payment-order-provisioning.js';
 
 describe('theCliniQ Phase 5 Step 5.3 payment boundaries', () => {
+  it('fails before claiming or contacting Razorpay when the provider is unconfigured', async () => {
+    let claimed = false;
+    const repository: PaymentOrderProvisioningRepository = {
+      claim: async () => { claimed = true; throw new Error('must not claim'); },
+      finalize: async () => { throw new Error('must not finalize'); },
+      reconcile: async () => { throw new Error('must not reconcile'); },
+    };
+    await expect(new PaymentOrderProvisioningService(repository, undefined, undefined).provision('patient', 'intent')).rejects.toMatchObject({ code: 'PROVIDER_NOT_CONFIGURED' });
+    expect(claimed).toBe(false);
+  });
+
   it('uses a deterministic non-sensitive receipt and finalizes only after provider validation', async () => {
     const calls: string[] = [];
     const repository: PaymentOrderProvisioningRepository = {

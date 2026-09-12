@@ -23,7 +23,7 @@ export interface PaymentOrderProvisioningRepository {
 }
 
 export class PaymentOrderProvisioningError extends Error {
-  public constructor(public readonly code: 'UNAUTHORIZED' | 'CONFLICT' | 'PROCESSING' | 'RECONCILIATION_REQUIRED' | 'PROVIDER_UNAVAILABLE') {
+  public constructor(public readonly code: 'UNAUTHORIZED' | 'CONFLICT' | 'PROCESSING' | 'RECONCILIATION_REQUIRED' | 'PROVIDER_NOT_CONFIGURED' | 'PROVIDER_UNAVAILABLE') {
     super(code);
     this.name = 'PaymentOrderProvisioningError';
   }
@@ -35,19 +35,22 @@ export class PaymentOrderProvisioningError extends Error {
  * short transactions in the repository.
  */
 export class PaymentOrderProvisioningService {
-  public constructor(private readonly repository: PaymentOrderProvisioningRepository, private readonly provider: PaymentProvider, private readonly leaseSeconds: number, private readonly now: () => Date = () => new Date()) {}
+  public constructor(private readonly repository: PaymentOrderProvisioningRepository, private readonly provider: PaymentProvider | undefined, private readonly leaseSeconds: number | undefined, private readonly now: () => Date = () => new Date()) {}
 
   public async provision(accountId: string | undefined, appointmentIntentId: string): Promise<{ state: 'PENDING_PROVIDER' | 'PROCESSING'; providerOrderId?: string; amountMinor?: bigint; currency?: string }> {
     if (!accountId) throw new PaymentOrderProvisioningError('UNAUTHORIZED');
-    const claim = await this.repository.claim(accountId, appointmentIntentId, this.leaseSeconds, this.now());
+    const provider = this.provider;
+    const leaseSeconds = this.leaseSeconds;
+    if (!provider || typeof leaseSeconds !== 'number' || !Number.isInteger(leaseSeconds) || leaseSeconds <= 0) throw new PaymentOrderProvisioningError('PROVIDER_NOT_CONFIGURED');
+    const claim = await this.repository.claim(accountId, appointmentIntentId, leaseSeconds, this.now());
     if (claim.kind === 'PENDING_PROVIDER') return { state: 'PENDING_PROVIDER', providerOrderId: claim.providerOrderId, amountMinor: claim.amountMinor, currency: claim.currency };
     if (claim.kind === 'PROCESSING') return { state: 'PROCESSING' };
     if (claim.kind === 'RECONCILIATION_REQUIRED') throw new PaymentOrderProvisioningError('RECONCILIATION_REQUIRED');
     if (claim.kind !== 'CLAIMED') throw new PaymentOrderProvisioningError('CONFLICT');
 
     try {
-      const order = await this.provider.findOrderByReceipt({ receipt: claim.receipt })
-        ?? await this.provider.createOrder({ receipt: claim.receipt, amountMinor: claim.amountMinor, currency: claim.currency });
+      const order = await provider.findOrderByReceipt({ receipt: claim.receipt })
+        ?? await provider.createOrder({ receipt: claim.receipt, amountMinor: claim.amountMinor, currency: claim.currency });
       const finalized = await this.repository.finalize({ accountId, paymentIntentId: claim.paymentIntentId, claimToken: claim.claimToken, order, now: this.now() });
       return { state: 'PENDING_PROVIDER', ...finalized };
     } catch (error) {
