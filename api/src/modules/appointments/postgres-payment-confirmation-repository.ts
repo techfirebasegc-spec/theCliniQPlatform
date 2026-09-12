@@ -14,7 +14,7 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
       const hash = payloadHash(input.payloadRaw);
       await db.query(`INSERT INTO provider_webhook_events (id,provider_key,provider_event_id,event_type,handler_version,status,payload,payload_raw,payload_hash,authenticated_at,persisted_at)
         VALUES ($1,$2,$3,$4,'phase5-step5.3',$5,$6::jsonb,$7,$8,current_timestamp,current_timestamp)
-        ON CONFLICT (provider_key,provider_event_id) DO NOTHING`, [createIdentifier(), input.providerKey, input.providerEventId, input.eventType, input.eventType === 'payment.captured' ? 'PERSISTED' : 'UNKNOWN', JSON.stringify(input.payload), input.payloadRaw, hash]);
+        ON CONFLICT (provider_key,provider_event_id) DO NOTHING`, [createIdentifier(), input.providerKey, input.providerEventId, input.eventType, input.eventType === 'payment.captured' || input.eventType === 'refund.processed' ? 'PERSISTED' : 'UNKNOWN', JSON.stringify(input.payload), input.payloadRaw, hash]);
       const row = (await db.query<Record<string, unknown>>('SELECT id,status,payload_hash FROM provider_webhook_events WHERE provider_key=$1 AND provider_event_id=$2 FOR UPDATE', [input.providerKey, input.providerEventId])).rows[0];
       if (!row || String(row.payload_hash) !== hash) {
         if (row) await this.reconcile(db, String(row.id), input.providerKey, null, 'WEBHOOK_ID_PAYLOAD_CONFLICT');
@@ -62,6 +62,41 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
     });
   }
 
+  /** Refund webhooks converge with the durable refund claim; no appointment lifecycle lock is needed here. */
+  public async confirmRefund(providerKey: 'RAZORPAY', providerEventId: string): Promise<{ status: 'REPLAYED' | 'RECONCILIATION_REQUIRED' | 'IGNORED' }> {
+    return this.database.transaction(async (db) => {
+      const event = await this.lockEvent(db, providerKey, providerEventId);
+      if (!event || event.status === 'PROCESSED') return { status: 'REPLAYED' };
+      if (event.status !== 'PERSISTED' || event.eventType !== 'refund.processed') return { status: 'IGNORED' };
+      const fact = refund(event.payload);
+      if (!fact) return this.reconcileRefund(db, event.id, providerKey, null, 'REFUND_EVENT_MALFORMED');
+      await this.processing(db, event.id);
+      const matches = (await db.query<Record<string, unknown>>(`SELECT refund.id,refund.status,refund.provider_refund_id FROM refunds refund JOIN payments payment ON payment.id=refund.payment_id
+        WHERE refund.provider_key=$1 AND payment.provider_payment_id=$2 AND refund.currency=$3 AND refund.amount_minor=$4
+          AND (refund.status='PROCESSING' OR refund.provider_refund_id=$5) FOR UPDATE OF refund,payment`, [providerKey,fact.paymentId,fact.currency,fact.amount.toString(),fact.refundId])).rows;
+      // An absent or ambiguous correlation is provider evidence only. Never mutate a
+      // candidate refund merely because it was first in a query result.
+      if (matches.length !== 1) return this.reconcileRefund(db, event.id, providerKey, null, matches.length === 0 ? 'REFUND_CORRELATION_NOT_FOUND' : 'REFUND_CORRELATION_AMBIGUOUS');
+      const refundId = String(matches[0].id);
+      if (String(matches[0].status)==='SUCCEEDED' && String(matches[0].provider_refund_id)===fact.refundId) { await this.process(db,event.id); return { status: 'REPLAYED' }; }
+      if (matches[0].provider_refund_id && String(matches[0].provider_refund_id) !== fact.refundId) {
+        return this.reconcileRefund(db, event.id, providerKey, refundId, 'REFUND_PROVIDER_FACT_CONFLICT');
+      }
+      const reference = (await db.query<{ internal_entity_type: string; internal_entity_id: string }>(`SELECT internal_entity_type,internal_entity_id FROM provider_references
+        WHERE provider_key=$1 AND reference_type='REFUND' AND provider_reference=$2 FOR UPDATE`, [providerKey, fact.refundId])).rows[0];
+      if (reference && (reference.internal_entity_type !== 'REFUND' || reference.internal_entity_id !== refundId)) {
+        return this.reconcileRefund(db, event.id, providerKey, refundId, 'REFUND_PROVIDER_REFERENCE_CONFLICT');
+      }
+      if (!reference) {
+        await db.query("INSERT INTO provider_references (id,provider_key,reference_type,provider_reference,internal_entity_type,internal_entity_id) VALUES ($1,$2,'REFUND',$3,'REFUND',$4)", [createIdentifier(),providerKey,fact.refundId,refundId]);
+      }
+      await db.query("UPDATE refunds SET status='SUCCEEDED',provider_refund_id=COALESCE(provider_refund_id,$2),updated_at=current_timestamp WHERE id=$1 AND status='PROCESSING'", [refundId,fact.refundId]);
+      await db.query("UPDATE refund_attempts SET status='SUCCEEDED',provider_refund_id=COALESCE(provider_refund_id,$2),completed_at=current_timestamp WHERE refund_id=$1 AND status='CLAIMED'", [refundId,fact.refundId]);
+      await this.process(db,event.id);
+      return { status: 'REPLAYED' };
+    });
+  }
+
   private async lockContext(db: PostgresExecutor, providerKey: string, orderId: string): Promise<Context | null> {
     const initial = (await db.query<{ appointment_intent_id: string }>('SELECT handoff.appointment_intent_id FROM payment_intents payment JOIN appointment_financial_handoffs handoff ON handoff.payment_intent_id=payment.id WHERE payment.provider_key=$1 AND payment.provider_order_id=$2', [providerKey, orderId])).rows[0];
     if (!initial) return null;
@@ -96,6 +131,8 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
   private async processing(db: PostgresExecutor,id:string){ await db.query("UPDATE provider_webhook_events SET status='PROCESSING',processing_started_at=current_timestamp WHERE id=$1 AND status='PERSISTED'",[id]); }
   private async process(db: PostgresExecutor,id:string){ await db.query("UPDATE provider_webhook_events SET status='PROCESSED',processed_at=current_timestamp WHERE id=$1 AND status='PROCESSING'",[id]); }
   private async reconcile(db: PostgresExecutor,eventId:string,key:string,paymentIntentId:string|null,reason:string):Promise<{status:'RECONCILIATION_REQUIRED'}>{ await this.processing(db,eventId); await db.query("UPDATE provider_webhook_events SET status='RECONCILIATION_REQUIRED',reconciliation_required_at=current_timestamp WHERE id=$1 AND status='PROCESSING'",[eventId]); if(paymentIntentId) await db.query("UPDATE payment_intents SET status='RECONCILIATION_REQUIRED',reconciliation_required_at=current_timestamp WHERE id=$1 AND status='PENDING_PROVIDER'",[paymentIntentId]); await db.query(`INSERT INTO reconciliation_records (id,status,provider_key,provider_webhook_event_id,internal_entity_type,internal_entity_id,discrepancy_data) VALUES ($1,'MANUAL_REVIEW',$2,$3,'PAYMENT_INTENT',$4,$5::jsonb)`,[createIdentifier(),key,eventId,paymentIntentId,JSON.stringify({reason})]); return {status:'RECONCILIATION_REQUIRED'}; }
+  private async reconcileRefund(db: PostgresExecutor,eventId:string,key:string,refundId:string|null,reason:string):Promise<{status:'RECONCILIATION_REQUIRED'}>{ await this.processing(db,eventId); await db.query("UPDATE provider_webhook_events SET status='RECONCILIATION_REQUIRED',reconciliation_required_at=current_timestamp WHERE id=$1 AND status='PROCESSING'",[eventId]); if(refundId) await db.query("UPDATE refunds SET status='RECONCILIATION_REQUIRED',updated_at=current_timestamp WHERE id=$1 AND status='PROCESSING'",[refundId]); await db.query(`INSERT INTO reconciliation_records (id,status,provider_key,provider_webhook_event_id,internal_entity_type,internal_entity_id,discrepancy_data) VALUES ($1,'MANUAL_REVIEW',$2,$3,'REFUND',$4,$5::jsonb)`,[createIdentifier(),key,eventId,refundId,JSON.stringify({reason})]); return {status:'RECONCILIATION_REQUIRED'}; }
 }
 function captured(payload:Record<string,unknown>):{paymentId:string;orderId:string;amount:bigint;currency:string}|null { try { const p=(payload.payload as Record<string,unknown>).payment as Record<string,unknown>; const e=p.entity as Record<string,unknown>; const amount=e.amount; if(typeof e.id!=='string'||typeof e.order_id!=='string'||typeof e.currency!=='string'||typeof amount!=='number'||!Number.isSafeInteger(amount)||amount<0||e.status!=='captured')return null; return {paymentId:e.id,orderId:e.order_id,amount:BigInt(amount),currency:e.currency}; } catch{return null;} }
+function refund(payload:Record<string,unknown>):{refundId:string;paymentId:string;amount:bigint;currency:string}|null { try { const entity=(((payload.payload as Record<string,unknown>).refund as Record<string,unknown>).entity) as Record<string,unknown>; const amount=entity.amount; if(typeof entity.id!=='string'||typeof entity.payment_id!=='string'||typeof entity.currency!=='string'||typeof amount!=='number'||!Number.isSafeInteger(amount)||amount<0||entity.status!=='processed') return null; return {refundId:entity.id,paymentId:entity.payment_id,amount:BigInt(amount),currency:entity.currency}; } catch { return null; } }
 function valid(c:Context,p:{orderId:string;amount:bigint;currency:string}){return c.providerOrderId===p.orderId&&c.amount===p.amount&&c.gross===p.amount&&c.currency===p.currency&&c.allocationCurrency===p.currency;}

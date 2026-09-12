@@ -16,6 +16,7 @@ export type CapturedPayment = {
 export interface PaymentConfirmationRepository {
   ingest(event: CapturedPayment | { providerEventId: string; providerKey: 'RAZORPAY'; eventType: string; payload: Record<string, unknown>; payloadRaw: string }): Promise<{ eventId: string; status: 'PERSISTED' | 'UNKNOWN' | 'PROCESSED' | 'RECONCILIATION_REQUIRED' }>;
   confirm(providerKey: 'RAZORPAY', providerEventId: string): Promise<{ status: 'CONFIRMED' | 'REPLAYED' | 'RECONCILIATION_REQUIRED' | 'IGNORED' }>;
+  confirmRefund?(providerKey: 'RAZORPAY', providerEventId: string): Promise<{ status: 'REPLAYED' | 'RECONCILIATION_REQUIRED' | 'IGNORED' }>;
 }
 
 export class PaymentConfirmationError extends Error {
@@ -32,10 +33,11 @@ export class PaymentConfirmationService {
     const type = string(parsed.event);
     const id = eventId?.trim();
     if (!id || !type) throw new PaymentConfirmationError('MALFORMED_EVENT');
-    if (type !== 'payment.captured') {
-      await this.repository.ingest({ providerEventId: id, providerKey: 'RAZORPAY', eventType: type, payload: parsed, payloadRaw: rawBody });
-      return { status: 'IGNORED' };
+    if (type === 'refund.processed') {
+      const ingested = await this.repository.ingest({ providerEventId: id, providerKey: 'RAZORPAY', eventType: type, payload: parsed, payloadRaw: rawBody });
+      return ingested.status === 'PERSISTED' && this.repository.confirmRefund ? this.repository.confirmRefund('RAZORPAY', id) : ingested.status === 'PROCESSED' ? { status: 'REPLAYED' } : ingested.status === 'RECONCILIATION_REQUIRED' ? { status: 'RECONCILIATION_REQUIRED' } : { status: 'IGNORED' };
     }
+    if (type !== 'payment.captured') { await this.repository.ingest({ providerEventId: id, providerKey: 'RAZORPAY', eventType: type, payload: parsed, payloadRaw: rawBody }); return { status: 'IGNORED' }; }
     const payment = object(object(parsed.payload).payment).entity;
     const entity = object(payment);
     const providerPaymentId = string(entity.id); const providerOrderId = string(entity.order_id); const currency = string(entity.currency);

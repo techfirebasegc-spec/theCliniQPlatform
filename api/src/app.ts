@@ -38,6 +38,11 @@ import { PostgresPaymentOrderProvisioningRepository } from './modules/appointmen
 import { PaymentConfirmationService } from './modules/appointments/payment-confirmation.js';
 import { PostgresPaymentConfirmationRepository } from './modules/appointments/postgres-payment-confirmation-repository.js';
 import { registerRazorpayWebhookRoutes } from './routes/razorpay-webhooks.js';
+import { registerAppointmentCancellationRoutes } from './routes/appointment-cancellations.js';
+import { AppointmentAuthorizationService } from './modules/appointments/appointment-authorization.js';
+import { PostgresAppointmentAuthorizationRepository } from './modules/appointments/postgres-appointment-authorization-repository.js';
+import { CancellationService } from './modules/appointments/cancellation-refunds.js';
+import { PostgresCancellationRefundRepository } from './modules/appointments/postgres-cancellation-refund-repository.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -81,6 +86,10 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
   void app.register(async (instance) => registerRazorpayWebhookRoutes(instance, { confirmation: new PaymentConfirmationService(paymentProvider, new PostgresPaymentConfirmationRepository(services.database)) }));
+  void app.register(async (instance) => registerAppointmentCancellationRoutes(instance, {
+    cancellations: new CancellationService(new PostgresCancellationRefundRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)),
+    sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+  }));
 
   return { app, services };
 }
