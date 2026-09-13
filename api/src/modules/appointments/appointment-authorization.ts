@@ -3,7 +3,7 @@ import type { TenantPermission } from '../authorization/authorization.js';
 import type { TenantContextService } from '../memberships/memberships.js';
 import type { PostgresExecutor } from '../sessions/postgres-session-repository.js';
 
-export type AppointmentOperation = 'appointment.view' | 'appointment.start' | 'appointment.complete' | 'appointment.cancel';
+export type AppointmentOperation = 'appointment.view' | 'appointment.start' | 'appointment.complete' | 'appointment.cancel' | 'appointment.reschedule';
 export type AppointmentParticipant =
   | { type: 'PATIENT'; patientProfileId: string }
   | { type: 'DOCTOR'; doctorProfileId: string }
@@ -54,7 +54,7 @@ export class AppointmentAuthorizationService {
 
     const patient = appointment.participants.find((participant): participant is Extract<AppointmentParticipant, { type: 'PATIENT' }> => participant.type === 'PATIENT');
     if (patient && await this.repository.accountOwnsPatientProfile(accountId, patient.patientProfileId)) {
-      if (operation === 'appointment.view' || operation === 'appointment.cancel') return appointment;
+      if (operation === 'appointment.view' || operation === 'appointment.cancel' || operation === 'appointment.reschedule') return appointment;
     }
 
     const doctor = appointment.participants.find((participant): participant is Extract<AppointmentParticipant, { type: 'DOCTOR' }> => participant.type === 'DOCTOR');
@@ -81,7 +81,7 @@ export class AppointmentAuthorizationService {
 
     const patient = appointment.participants.find((participant): participant is Extract<AppointmentParticipant, { type: 'PATIENT' }> => participant.type === 'PATIENT');
     if (patient && await this.repository.accountOwnsPatientProfileForUpdate(database, accountId, patient.patientProfileId)) {
-      if (operation === 'appointment.view' || operation === 'appointment.cancel') return appointment;
+      if (operation === 'appointment.view' || operation === 'appointment.cancel' || operation === 'appointment.reschedule') return appointment;
     }
 
     const doctor = appointment.participants.find((participant): participant is Extract<AppointmentParticipant, { type: 'DOCTOR' }> => participant.type === 'DOCTOR');

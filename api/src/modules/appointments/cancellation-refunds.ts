@@ -25,6 +25,7 @@ export interface CancellationContext {
   appointmentIntentId: string;
   reservationId: string;
   reservationStatus: 'HELD' | 'RELEASED' | 'EXPIRED';
+  committedCapacityActive: boolean;
   handoffId: string;
   allocationSnapshotId: string;
   serviceOfferingId: string;
@@ -57,6 +58,7 @@ export interface CancellationRepository {
   selectRefundPolicies(database: PostgresExecutor, input: { at: Date; providerKey: string; serviceOfferingId: string }): Promise<RefundPolicy[]>;
   transitionAppointment(database: PostgresExecutor, appointmentId: string, from: AppointmentStatus, to: 'CANCELLED'): Promise<boolean>;
   releaseReservation(database: PostgresExecutor, reservationId: string, at: Date): Promise<boolean>;
+  releaseCommittedCapacity(database: PostgresExecutor, appointmentId: string, at: Date): Promise<boolean>;
   deriveSettlementConsequence(database: PostgresExecutor, allocationSnapshotId: string): Promise<SettlementConsequence>;
   appendAudit(database: PostgresExecutor, event: AuditEventInput): Promise<string>;
   appendAppointmentEvent(database: PostgresExecutor, event: { id: string; appointmentId: string; actorAccountId: string; previousStatus: AppointmentStatus; reason: string; context: Record<string, string | number | boolean | null>; auditEventId: string }): Promise<void>;
@@ -179,6 +181,7 @@ function decide(context: CancellationContext, policy: RefundPolicy, now: Date): 
 }
 async function releaseCapacity(repository: CancellationRepository, database: PostgresExecutor, context: CancellationContext, now: Date): Promise<boolean> {
   if (context.appointmentStatus === 'IN_PROGRESS' || context.reservationStatus !== 'HELD' || context.appointmentStartsAt <= now) return false;
+  if (context.appointmentStatus === 'CONFIRMED' && context.committedCapacityActive && !await repository.releaseCommittedCapacity(database, context.appointmentId, now)) throw new CancellationError('CONFLICT');
   if (!await repository.releaseReservation(database, context.reservationId, now)) throw new CancellationError('CONFLICT');
   return true;
 }

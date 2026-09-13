@@ -43,6 +43,9 @@ import { AppointmentAuthorizationService } from './modules/appointments/appointm
 import { PostgresAppointmentAuthorizationRepository } from './modules/appointments/postgres-appointment-authorization-repository.js';
 import { CancellationService } from './modules/appointments/cancellation-refunds.js';
 import { PostgresCancellationRefundRepository } from './modules/appointments/postgres-cancellation-refund-repository.js';
+import { RescheduleService } from './modules/appointments/rescheduling.js';
+import { PostgresRescheduleRepository } from './modules/appointments/postgres-rescheduling-repository.js';
+import { registerAppointmentRescheduleRoutes } from './routes/appointment-reschedules.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -90,6 +93,10 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   void app.register(async (instance) => registerRazorpayWebhookRoutes(instance, { confirmation: paymentProvider ? new PaymentConfirmationService(paymentProvider, new PostgresPaymentConfirmationRepository(services.database)) : undefined }));
   void app.register(async (instance) => registerAppointmentCancellationRoutes(instance, {
     cancellations: new CancellationService(new PostgresCancellationRefundRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)),
+    sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+  }));
+  void app.register(async (instance) => registerAppointmentRescheduleRoutes(instance, {
+    reschedules: new RescheduleService(new PostgresAppointmentRepository(services.database), new PostgresRescheduleRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)),
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
 

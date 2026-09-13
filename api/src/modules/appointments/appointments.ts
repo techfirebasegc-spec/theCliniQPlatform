@@ -17,7 +17,7 @@ export type BookableService = {
 export type AppointmentIntent = {
   id: string; patientAccountId: string; bookingActorAccountId: string; bookingTenantId: string | null; serviceExposureId: string | null; provider: ProviderInput; serviceOfferingId: string; serviceOfferingVersionId: string;
   serviceOfferingPriceId: string; currency: string; priceAmountMinor: bigint; providerTimezone: string; requestedLocalAt: string; startsAt: Date; endsAt: Date;
-  serviceDurationSeconds: number; bufferBeforeSeconds: number; bufferAfterSeconds: number; holdSeconds: number; bookingRelationship: 'PATIENT_PROVIDER' | 'CLINIC_DOCTOR'; state: 'APPOINTMENT_INTENT' | 'SLOT_RESERVED' | 'PAYMENT_PENDING' | 'EXPIRED' | 'CANCELLED';
+  serviceDurationSeconds: number; bufferBeforeSeconds: number; bufferAfterSeconds: number; holdSeconds: number; bookingRelationship: 'PATIENT_PROVIDER' | 'CLINIC_DOCTOR'; state: 'APPOINTMENT_INTENT' | 'SLOT_RESERVED' | 'PAYMENT_PENDING' | 'FULFILLED' | 'EXPIRED' | 'CANCELLED';
   idempotencyKey: string; requestFingerprint: string; expiresAt: Date;
 };
 export type SlotReservation = { id: string; appointmentIntentId: string; serviceOfferingVersionId: string; provider: ProviderInput; startsAt: Date; endsAt: Date; capacityUnits: number; status: 'HELD' | 'RELEASED' | 'EXPIRED'; expiresAt: Date; releasedAt: Date | null; expiredAt: Date | null };

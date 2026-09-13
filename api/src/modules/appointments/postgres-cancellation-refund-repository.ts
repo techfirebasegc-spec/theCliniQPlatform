@@ -32,6 +32,7 @@ export class PostgresCancellationRefundRepository implements CancellationReposit
       appointmentId: String(appointment.id), appointmentStatus: appointment.status as AppointmentStatus, appointmentStartsAt: new Date(String(appointment.starts_at)),
       appointmentIntentId: String(appointment.appointment_intent_id), reservationId: String(appointment.slot_reservation_id),
       reservationStatus: reservation.status as 'HELD' | 'RELEASED' | 'EXPIRED',
+      committedCapacityActive: (await database.query('SELECT 1 FROM appointment_committed_capacities WHERE appointment_id=$1 AND status=\'ACTIVE\' FOR UPDATE', [appointment.id])).rowCount === 1,
       handoffId: String(appointment.appointment_financial_handoff_id), allocationSnapshotId: String(appointment.financial_allocation_snapshot_id),
       serviceOfferingId: String(appointment.service_offering_id), providerKey: String(paymentIntent.provider_key), currency: String(allocation.currency),
       payment: payment ? { id: String(payment.id), status: String(payment.status), amountMinor: BigInt(String(payment.amount_minor)), currency: String(payment.currency), providerKey: String(payment.provider_key) } : null,
@@ -64,6 +65,9 @@ export class PostgresCancellationRefundRepository implements CancellationReposit
   }
   public async releaseReservation(database: PostgresExecutor, reservationId: string, at: Date): Promise<boolean> {
     return (await database.query("UPDATE slot_reservations SET status='RELEASED',released_at=$2 WHERE id=$1 AND status='HELD'", [reservationId, at])).rowCount === 1;
+  }
+  public async releaseCommittedCapacity(database: PostgresExecutor, appointmentId: string, at: Date): Promise<boolean> {
+    return (await database.query("UPDATE appointment_committed_capacities SET status='RELEASED',released_at=$2 WHERE appointment_id=$1 AND status='ACTIVE'", [appointmentId, at])).rowCount === 1;
   }
   public async deriveSettlementConsequence(database: PostgresExecutor, allocationSnapshotId: string): Promise<SettlementConsequence> {
     const rows = (await database.query<{ status: string }>('SELECT status FROM settlements WHERE allocation_snapshot_id=$1 FOR UPDATE', [allocationSnapshotId])).rows;

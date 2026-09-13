@@ -52,6 +52,7 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
       if (moved.rowCount !== 1) return this.reconcile(db, event.id, providerKey, context.paymentIntentId, 'PAYMENT_STATE_CONFLICT');
       const appointmentId = await this.appointment(db, context);
       if (!context.appointmentId) await this.createParticipants(db, appointmentId, context.intentId);
+      await this.createCommittedCapacity(db, appointmentId);
       const transitioned = await db.query("UPDATE appointments SET status='CONFIRMED' WHERE id=$1 AND status='PAYMENT_PENDING'", [appointmentId]);
       if (transitioned.rowCount !== 1) return this.reconcile(db, event.id, providerKey, context.paymentIntentId, 'APPOINTMENT_STATE_CONFLICT');
       const auditId = createIdentifier();
@@ -112,6 +113,14 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
   private async appointment(db: PostgresExecutor, c: Context): Promise<string> { if (c.appointmentId) return c.appointmentId; const id=createIdentifier(); await db.query(`INSERT INTO appointments (id,appointment_intent_id,slot_reservation_id,appointment_financial_handoff_id,financial_allocation_snapshot_id,payment_intent_id,patient_account_id,booking_actor_account_id,booking_tenant_id,provider_doctor_profile_id,provider_clinic_id,service_exposure_id,service_offering_id,service_offering_version_id,service_offering_price_id,currency,price_amount_minor,provider_timezone,requested_local_at,starts_at,ends_at,service_duration_seconds,buffer_before_seconds,buffer_after_seconds,hold_seconds,status)
     SELECT $1,intent.id,reservation.id,handoff.id,handoff.financial_allocation_snapshot_id,payment.id,intent.patient_account_id,intent.booking_actor_account_id,intent.booking_tenant_id,intent.provider_doctor_profile_id,intent.provider_clinic_id,intent.service_exposure_id,intent.service_offering_id,intent.service_offering_version_id,intent.service_offering_price_id,intent.currency,intent.price_amount_minor,intent.provider_timezone,intent.requested_local_at,intent.starts_at,intent.ends_at,intent.service_duration_seconds,intent.buffer_before_seconds,intent.buffer_after_seconds,intent.hold_seconds,'PAYMENT_PENDING'
     FROM appointment_intents intent JOIN slot_reservations reservation ON reservation.appointment_intent_id=intent.id JOIN appointment_financial_handoffs handoff ON handoff.appointment_intent_id=intent.id JOIN payment_intents payment ON payment.id=handoff.payment_intent_id WHERE intent.id=$2`,[id,c.intentId]); return id; }
+  private async createCommittedCapacity(db: PostgresExecutor, appointmentId: string): Promise<void> {
+    await db.query(`INSERT INTO appointment_committed_capacities (id,appointment_id,slot_reservation_id,service_offering_version_id,starts_at,ends_at,capacity_units)
+      SELECT $1,appointment.id,appointment.slot_reservation_id,reservation.service_offering_version_id,reservation.starts_at,reservation.ends_at,reservation.capacity_units
+      FROM appointments appointment JOIN slot_reservations reservation ON reservation.id=appointment.slot_reservation_id
+      WHERE appointment.id=$2 ON CONFLICT (appointment_id) DO NOTHING`, [createIdentifier(), appointmentId]);
+    // A retry may lock the already-created PAYMENT_PENDING appointment. The deferred
+    // confirmation guard still rejects a missing or released capacity record.
+  }
   /** Inserts immutable, context-derived evidence within the existing confirmation transaction. */
   private async createParticipants(db: PostgresExecutor, appointmentId: string, intentId: string): Promise<void> {
     const patient = await db.query(`INSERT INTO appointment_participants (id,appointment_id,participant_type,patient_profile_id)

@@ -19,19 +19,27 @@ class Repository implements AppointmentAuthorizationRepository {
 }
 
 function setup() {
-  const repository = new Repository(); const audit: unknown[] = []; const permissions = new Set(['owner:tenant-a:appointment.view', 'owner:tenant-a:appointment.complete', 'owner:tenant-a:appointment.cancel', 'admin:tenant-a:appointment.view', 'admin:tenant-a:appointment.complete', 'admin:tenant-a:appointment.cancel', 'staff:tenant-a:appointment.view']);
+  const repository = new Repository(); const audit: unknown[] = []; const permissions = new Set(['owner:tenant-a:appointment.view', 'owner:tenant-a:appointment.complete', 'owner:tenant-a:appointment.cancel', 'owner:tenant-a:appointment.reschedule', 'admin:tenant-a:appointment.view', 'admin:tenant-a:appointment.complete', 'admin:tenant-a:appointment.cancel', 'admin:tenant-a:appointment.reschedule', 'staff:tenant-a:appointment.view']);
   const require = async (account: string, tenant: string, permission: string) => { if (!permissions.has(`${account}:${tenant}:${permission}`)) throw new Error('FORBIDDEN'); return { id: 'membership', accountId: account, tenantId: tenant, role: 'CLINIC_STAFF' as const, status: 'ACTIVE' as const }; };
   const context = { require, requireInTransaction: async (_db: unknown, account: string, tenant: string, permission: string) => require(account, tenant, permission) };
   return { repository, audit, permissions, service: new AppointmentAuthorizationService(repository, context, { append: async (event) => { audit.push(event); } }) };
 }
 
 describe('theCliniQ Phase 5.4 appointment operational access', () => {
-  it('allows a patient only to view/cancel their own immutable patient participation', async () => {
+  it('allows a patient only to view/cancel/reschedule their own immutable patient participation', async () => {
     const { service } = setup();
     await expect(service.authorize('patient-account', 'appointment-doctor', 'appointment.view')).resolves.toEqual(patientDoctor);
     await expect(service.authorize('patient-account', 'appointment-doctor', 'appointment.cancel')).resolves.toEqual(patientDoctor);
+    await expect(service.authorize('patient-account', 'appointment-doctor', 'appointment.reschedule')).resolves.toEqual(patientDoctor);
     await expect(service.authorize('patient-account', 'appointment-doctor', 'appointment.start')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(service.authorize('other-patient', 'appointment-doctor', 'appointment.view')).rejects.toBeInstanceOf(AppointmentAuthorizationError);
+  });
+
+  it('requires owner/admin permission for clinic rescheduling and gives staff none by default', async () => {
+    const { service } = setup();
+    await expect(service.authorize('owner', 'appointment-clinic', 'appointment.reschedule')).resolves.toEqual(patientClinic);
+    await expect(service.authorize('admin', 'appointment-clinic', 'appointment.reschedule')).resolves.toEqual(patientClinic);
+    await expect(service.authorize('staff', 'appointment-clinic', 'appointment.reschedule')).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('requires participating doctor ownership and current eligibility for sensitive operations', async () => {
