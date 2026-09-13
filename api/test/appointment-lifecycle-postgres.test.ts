@@ -60,7 +60,7 @@ describe.skipIf(!databaseUrl)('theCliniQ Phase 5.7 real PostgreSQL Start / Compl
     const fixture = await seedOperationalAppointment(fixturePool!, 'IN_PROGRESS'); const serviceA = operationalService(databaseA!); const serviceB = operationalService(databaseB!);
     await serviceA.authorization.authorize(fixture.doctorAccountId, fixture.appointmentId, 'appointment.complete'); await serviceB.authorization.authorize(fixture.doctorAccountId, fixture.appointmentId, 'appointment.complete');
     const outcomes = await Promise.allSettled([complete(serviceA, fixture), complete(serviceB, fixture)]);
-    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1); expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1); expect(outcomes.find((outcome) => outcome.status === 'rejected')).toMatchObject({ reason: { code: 'STALE_TRANSITION' } });
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1); expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1); expect(outcomes.find((outcome) => outcome.status === 'rejected')).toMatchObject({ reason: { code: 'TERMINAL_APPOINTMENT' } });
     await expectState(fixture, 'COMPLETED', 'COMPLETED', 3);
   });
 
