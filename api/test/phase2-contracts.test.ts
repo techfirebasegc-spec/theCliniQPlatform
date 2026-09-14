@@ -11,10 +11,11 @@ import { createIdentifier } from '../src/shared/identifiers/uuid.js';
 import { describe, expect, it } from 'vitest';
 
 describe('Phase 2 shared contracts', () => {
-  it('limits active network capabilities to DISCOVER and CONTACT', () => {
-    expect(networkConnectionCapabilities).toEqual(['DISCOVER', 'CONTACT']);
+  it('exposes the approved symmetric and directional network capability vocabulary', () => {
+    expect(networkConnectionCapabilities).toEqual(['DISCOVER', 'CONTACT', 'BOOK', 'REFER']);
     expect(isOneOf('DISCOVER', networkConnectionCapabilities)).toBe(true);
-    expect(isOneOf('REFER', networkConnectionCapabilities)).toBe(false);
+    expect(isOneOf('REFER', networkConnectionCapabilities)).toBe(true);
+    expect(isOneOf('PAYMENT', networkConnectionCapabilities)).toBe(false);
   });
 
   it('validates supported identifiers and timestamps', () => {

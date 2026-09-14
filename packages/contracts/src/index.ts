@@ -39,7 +39,7 @@ export type NetworkConnectionKind = (typeof networkConnectionKinds)[number];
 export const networkConnectionStatuses = ['PENDING', 'ACCEPTED', 'REJECTED', 'REVOKED', 'BLOCKED'] as const;
 export type NetworkConnectionStatus = (typeof networkConnectionStatuses)[number];
 
-export const networkConnectionCapabilities = ['DISCOVER', 'CONTACT'] as const;
+export const networkConnectionCapabilities = ['DISCOVER', 'CONTACT', 'BOOK', 'REFER'] as const;
 export type NetworkConnectionCapability = (typeof networkConnectionCapabilities)[number];
 
 export const networkConnectionCapabilityStatuses = ['ACTIVE', 'REVOKED'] as const;
