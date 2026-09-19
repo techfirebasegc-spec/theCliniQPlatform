@@ -83,6 +83,25 @@ and Phase 5 Decisions 1–10.
 | Persistence versus calculation | Persisted/materialized candidate slots versus calculation-on-demand is intentionally deferred. | **DEFERRED** | Decision 17 prohibits any persistent generated-slot table from becoming transactional authority. | Rebuild, invalidation, and parity tests. |
 | Redis and invalidation | Redis may cache derived results only. Cache invalidation/rebuild must not grant a reservation or override PostgreSQL. | **APPROVED** | Redis is never transactional/authorization authority. | Stale-cache, outage, and rebuild tests. |
 
+## F.1 Scheduling-mode interpretation
+
+The shared Availability Foundation is the input to both approved scheduling
+modes. See [Phase 5 scheduling modes](phase5-scheduling-modes-decision-matrix.md)
+for the authoritative mode-specific rules. This adds no second availability
+system and selects no business capacity, cutoff, or wait-time value.
+
+Phase 5.8 Decision 6 implements the Queue Window as a persistent PostgreSQL
+capacity resource tied restrictively to the approved Availability Configuration
+and immutable Service Offering Version. It does not alter the implemented
+fixed-slot availability model or make a generated-slot cache authoritative.
+
+| Decision | Proposed rule | Status | Why / downstream impact | Required tests |
+| --- | --- | --- | --- | --- |
+| Scheduling mode | The applicable provider/service scheduling context is versioned as either `FIXED_SLOT` or `QUEUE`. Different services may choose different modes. | **APPROVED** | Prevents a global patients-per-hour rule and preserves historical booking interpretation. | Version selection/history and cross-service isolation tests. |
+| Fixed-slot interpretation | A candidate represents an exact appointment interval with versioned duration/buffers and PostgreSQL-reserved capacity. | **APPROVED** | Preserves the existing Step 3 exact-interval reservation model. | Exact interval and capacity race tests. |
+| Queue interpretation | Under approved Phase 5.8 Decision 5, a candidate represents a provider-local consultation-window start/end with server-derived UTC bounds, explicit maximum queue capacity, deterministic position, and queue status—not a promised start time. | **APPROVED** | Shares availability inputs without presenting an estimate as a guarantee. | Window/capacity/position/status concurrency tests. |
+| Queue authority | PostgreSQL transactionally reserves queue capacity, rejects a full window deterministically, and assigns one deterministic position; Redis remains cache/supporting infrastructure only. | **APPROVED** | Prevents stale cache or client ordering from authorizing a booking. | Two-connection capacity/position, cache-outage tests. |
+
 ## G. Reservation boundary (future implementation)
 
 | Decision | Proposed rule | Status | Why / downstream impact | Required tests |
@@ -93,7 +112,7 @@ and Phase 5 Decisions 1–10.
 | Expiry | Expired reservations release capacity; expiry is rechecked transactionally on every action. | **APPROVED** | A worker may assist but is not correctness authority. | Expiry/retry/race tests. |
 | Late payment | A payment fact after reservation expiry enters reconciliation and cannot automatically restore capacity or confirm an appointment. | **APPROVED** | Preserves Phase 4 provider/reconciliation boundary. | Late-success/reconciliation tests. |
 | Reschedule ordering | Secure new capacity before releasing old capacity, in one transaction. | **APPROVED** | Prevents accidental loss of an existing booking. | Concurrent reschedule and rollback tests. |
-| Deadlock-safe order | Use deterministic global lock ordering, lock only the smallest authoritative resource necessary, and never hold database locks while calling external services. Same-capacity concurrent operations serialize; reschedule secures new capacity before releasing old capacity; expiry/cancellation lock relevant reservation/capacity state. | **APPROVED** | Decision 18 defines the required transaction discipline; the concrete capacity resource is deferred with reservation implementation. | Two-session inverse-order, reschedule, expiry, cancellation, and external-call boundary tests. |
+| Deadlock-safe order | Use deterministic global lock ordering, lock only the smallest authoritative resource necessary, and never hold database locks while calling external services. Same-capacity concurrent operations serialize; reschedule secures new capacity before releasing old capacity; expiry/cancellation lock relevant reservation/capacity state. | **APPROVED** | Decision 18 defines the required transaction discipline. Phase 5.8 Decision 6 implements the Queue Window resource and conditional network/referral lock order; disposable PostgreSQL verification proves Queue capacity/position serialization. Future runtime operations must retain this order. | Two-session inverse-order, reschedule, expiry, cancellation, and external-call boundary tests. |
 
 ## H. Availability precedence
 
