@@ -40,7 +40,7 @@ export class PostgresDelegatedBookingRepository implements DelegatedBookingRepos
       JOIN network_capability_proposals proposal ON proposal.id=capability.accepted_proposal_id AND proposal.status='ACCEPTED' AND proposal.proposer_doctor_profile_id=authorization.target_doctor_profile_id AND proposal.accepter_clinic_id=authorization.delegated_clinic_id
       LEFT JOIN tenant_memberships membership ON membership.tenant_id=authorization.delegated_tenant_id AND membership.account_id=$2 AND membership.status='ACTIVE' AND membership.role IN ('CLINIC_OWNER','CLINIC_ADMIN')
       WHERE authorization.id=$1 AND authorization.scheduling_mode='FIXED_SLOT' AND authorization.approved_ends_at=authorization.approved_starts_at + make_interval(secs => configuration.slot_duration_seconds + configuration.buffer_before_seconds + configuration.buffer_after_seconds)
-        AND ($2=authorization.patient_account_id OR membership.id IS NOT NULL)
+        AND membership.id IS NOT NULL
       FOR UPDATE OF authorization,offering_version,configuration,capability,connection
     `, [authorization.id, actorId])).rows[0];
     if (!row) return null; const auth = parseAuthorization(row)!;
