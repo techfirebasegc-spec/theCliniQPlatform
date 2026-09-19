@@ -6,10 +6,11 @@ export interface PaymentProvider {
   findOrderByReceipt(input: { receipt: string }): Promise<ProviderOrder | null>;
   verifyPayment(input: { providerOrderId: string; providerPaymentId?: string }): Promise<VerifiedPayment>;
   verifyWebhook(input: { payload: string; signature: string }): boolean;
-  createRefund(input: { providerPaymentId: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<{ providerRefundId: string }>;
+  createRefund(input: { providerPaymentId: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<ProviderRefund>;
   createSettlement(input: { beneficiaryReference: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<{ providerSettlementId: string }>;
 }
 export type VerifiedPayment = { status: 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; providerPaymentId: string | null; providerOrderId: string; amountMinor: bigint | null; currency: string | null };
+export type ProviderRefund = { status: 'SUCCEEDED' | 'PROCESSING' | 'FAILED'; providerRefundId: string; providerPaymentId: string; amountMinor: bigint; currency: string };
 
 export interface ProviderOrder { providerOrderId: string; receipt: string; amountMinor: bigint; currency: string; }
 
@@ -48,7 +49,17 @@ export class RazorpayPaymentProvider implements PaymentProvider {
     const actual = Buffer.from(input.signature, 'hex'); const candidate = Buffer.from(expected, 'hex');
     return actual.length === candidate.length && timingSafeEqual(actual, candidate);
   }
-  public async createRefund(input: { providerPaymentId: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<{ providerRefundId: string }> { void input; throw new ProviderOperationUnavailable(); }
+  public async createRefund(input: { providerPaymentId: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<ProviderRefund> {
+    const response = await this.request(`/payments/${encodeURIComponent(input.providerPaymentId)}/refund`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ amount: safeAmount(input.amountMinor), receipt: input.idempotencyKey }), signal: AbortSignal.timeout(10_000),
+    });
+    let body: unknown;
+    try { body = await response.json(); } catch { throw new ProviderOperationError('PROVIDER_MALFORMED'); }
+    const value = refund(body);
+    if (value.providerPaymentId !== input.providerPaymentId || value.amountMinor !== input.amountMinor || value.currency !== input.currency) throw new ProviderOperationError('PROVIDER_MALFORMED');
+    return value;
+  }
   public async createSettlement(input: { beneficiaryReference: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<{ providerSettlementId: string }> { void input; throw new ProviderOperationUnavailable(); }
   private async request(path: string, init?: RequestInit): Promise<Response> {
     let response: Response;
@@ -65,7 +76,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
   }
 }
 export class ProviderOperationUnavailable extends Error { public constructor() { super('PROVIDER_OPERATION_UNAVAILABLE'); this.name = 'ProviderOperationUnavailable'; } }
-export class ProviderOperationError extends Error { public constructor(public readonly code: 'PROVIDER_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'PROVIDER_CONFLICT') { super(code); this.name = 'ProviderOperationError'; } }
+export class ProviderOperationError extends Error { public constructor(public readonly code: 'PROVIDER_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'PROVIDER_CONFLICT' | 'PROVIDER_MALFORMED') { super(code); this.name = 'ProviderOperationError'; } }
 
 function safeAmount(value: bigint): number { if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new ProviderOperationError('PROVIDER_REJECTED'); return Number(value); }
 async function json(response: Response): Promise<unknown> { try { return await response.json(); } catch { throw new ProviderOperationError('PROVIDER_REJECTED'); } }
@@ -79,6 +90,13 @@ function payment(value: unknown): { providerPaymentId: string; providerOrderId: 
   const body = object(value); const amount = body.amount;
   if (typeof body.id !== 'string' || typeof body.order_id !== 'string' || typeof body.currency !== 'string' || typeof body.status !== 'string' || typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) throw new ProviderOperationError('PROVIDER_REJECTED');
   return { providerPaymentId: body.id, providerOrderId: body.order_id, amountMinor: BigInt(amount), currency: body.currency, status: body.status };
+}
+function refund(value: unknown): ProviderRefund {
+  const body = object(value); const amount = body.amount;
+  if (typeof body.id !== 'string' || typeof body.payment_id !== 'string' || typeof body.currency !== 'string' || typeof body.status !== 'string' || typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) throw new ProviderOperationError('PROVIDER_MALFORMED');
+  const status = body.status === 'processed' ? 'SUCCEEDED' : body.status === 'pending' || body.status === 'processing' ? 'PROCESSING' : body.status === 'failed' ? 'FAILED' : null;
+  if (!status) throw new ProviderOperationError('PROVIDER_MALFORMED');
+  return { status, providerRefundId: body.id, providerPaymentId: body.payment_id, amountMinor: BigInt(amount), currency: body.currency };
 }
 function object(value: unknown): Record<string, unknown> { if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>; throw new ProviderOperationError('PROVIDER_REJECTED'); }
 function array(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }

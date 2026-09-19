@@ -44,7 +44,7 @@ import { registerRazorpayWebhookRoutes } from './routes/razorpay-webhooks.js';
 import { registerAppointmentCancellationRoutes } from './routes/appointment-cancellations.js';
 import { AppointmentAuthorizationService } from './modules/appointments/appointment-authorization.js';
 import { PostgresAppointmentAuthorizationRepository } from './modules/appointments/postgres-appointment-authorization-repository.js';
-import { CancellationService } from './modules/appointments/cancellation-refunds.js';
+import { CancellationService, RefundExecutionService } from './modules/appointments/cancellation-refunds.js';
 import { PostgresCancellationRefundRepository } from './modules/appointments/postgres-cancellation-refund-repository.js';
 import { RescheduleService } from './modules/appointments/rescheduling.js';
 import { PostgresRescheduleRepository } from './modules/appointments/postgres-rescheduling-repository.js';
@@ -91,6 +91,8 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   const paymentProvider = environment.RAZORPAY_KEY_ID && environment.RAZORPAY_KEY_SECRET && environment.RAZORPAY_WEBHOOK_SECRET
     ? new RazorpayPaymentProvider(environment.RAZORPAY_KEY_ID, environment.RAZORPAY_KEY_SECRET, environment.RAZORPAY_WEBHOOK_SECRET)
     : undefined;
+  const cancellationRefunds = new PostgresCancellationRefundRepository(services.database);
+  const refundExecution = paymentProvider ? new RefundExecutionService(cancellationRefunds, paymentProvider) : undefined;
   const confirmation = paymentProvider ? new PaymentConfirmationService(paymentProvider, new PostgresPaymentConfirmationRepository(services.database)) : undefined;
   void app.register(async (instance) => registerAppointmentIntentRoutes(instance, {
     appointments: new AppointmentService(new PostgresAppointmentRepository(services.database), audit),
@@ -105,7 +107,7 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   }));
   void app.register(async (instance) => registerRazorpayWebhookRoutes(instance, { confirmation }));
   void app.register(async (instance) => registerAppointmentCancellationRoutes(instance, {
-    cancellations: new CancellationService(new PostgresCancellationRefundRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)),
+    cancellations: new CancellationService(cancellationRefunds, new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)), refunds: refundExecution,
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
   void app.register(async (instance) => registerAppointmentRescheduleRoutes(instance, {

@@ -40,7 +40,9 @@ export class PostgresCancellationRefundRepository implements CancellationReposit
   }
 
   public async findCancellation(database: PostgresExecutor, appointmentId: string): Promise<CancellationDecision | null> {
-    const row = (await database.query<Record<string, unknown>>('SELECT * FROM appointment_cancellation_decisions WHERE appointment_id=$1 FOR UPDATE', [appointmentId])).rows[0];
+    const row = (await database.query<Record<string, unknown>>(`SELECT decision.*,refund.id AS refund_id FROM appointment_cancellation_decisions decision
+      LEFT JOIN refunds refund ON refund.appointment_cancellation_decision_id=decision.id
+      WHERE decision.appointment_id=$1 FOR UPDATE OF decision`, [appointmentId])).rows[0];
     return row ? decision(row) : null;
   }
   public async selectRefundPolicies(database: PostgresExecutor, input: { at: Date; providerKey: string; serviceOfferingId: string }): Promise<RefundPolicy[]> {
@@ -109,9 +111,25 @@ export class PostgresCancellationRefundRepository implements CancellationReposit
     await database.query("INSERT INTO refund_attempts (id,refund_id,attempt_number,status,provider_key,idempotency_key) VALUES ($1,$2,$3,'CLAIMED',$4,$5)", [id,refundId,attemptNumber,refund.providerKey,`${refund.idempotencyKey}:attempt:${attemptNumber}`]);
     return { refund: { ...refund, status: 'PROCESSING' }, attempt: { id, attemptNumber } };
   }
+  public async recordProviderRefund(database: PostgresExecutor, input: { refundId: string; attemptId: string; providerRefundId: string }): Promise<'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'> {
+    const refund = (await database.query<{ status: string; provider_key: string; provider_refund_id: string | null }>('SELECT status,provider_key,provider_refund_id FROM refunds WHERE id=$1 FOR UPDATE', [input.refundId])).rows[0];
+    if (!refund) return 'RECONCILIATION_REQUIRED';
+    if (refund.status === 'SUCCEEDED' && refund.provider_refund_id === input.providerRefundId) return 'SUCCEEDED';
+    if (refund.status !== 'PROCESSING' || (refund.provider_refund_id && refund.provider_refund_id !== input.providerRefundId)) return 'RECONCILIATION_REQUIRED';
+    const attempt = (await database.query('SELECT id FROM refund_attempts WHERE id=$1 AND refund_id=$2 AND status=\'CLAIMED\' FOR UPDATE', [input.attemptId, input.refundId])).rowCount;
+    if (attempt !== 1) return 'RECONCILIATION_REQUIRED';
+    const reference = (await database.query<{ internal_entity_type: string; internal_entity_id: string }>(`SELECT internal_entity_type,internal_entity_id FROM provider_references
+      WHERE provider_key=$1 AND reference_type='REFUND' AND provider_reference=$2 FOR UPDATE`, [refund.provider_key, input.providerRefundId])).rows[0];
+    if (reference && (reference.internal_entity_type !== 'REFUND' || reference.internal_entity_id !== input.refundId)) return 'RECONCILIATION_REQUIRED';
+    if (!reference) await database.query("INSERT INTO provider_references (id,provider_key,reference_type,provider_reference,internal_entity_type,internal_entity_id) VALUES ($1,$2,'REFUND',$3,'REFUND',$4)", [createIdentifier(), refund.provider_key, input.providerRefundId, input.refundId]);
+    await database.query('UPDATE refunds SET provider_refund_id=COALESCE(provider_refund_id,$2),updated_at=current_timestamp WHERE id=$1 AND status=\'PROCESSING\'', [input.refundId, input.providerRefundId]);
+    return 'PROCESSING';
+  }
   public async finalizeRefund(database: PostgresExecutor, input: { refundId: string; attemptId: string; status: 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; providerRefundId?: string; failureCode?: string }): Promise<'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'> {
     const refund = (await database.query<{ status: string; provider_key: string; provider_refund_id: string | null }>('SELECT status,provider_key,provider_refund_id FROM refunds WHERE id=$1 FOR UPDATE', [input.refundId])).rows[0];
-    if (!refund || refund.status !== 'PROCESSING') return 'RECONCILIATION_REQUIRED';
+    if (!refund) return 'RECONCILIATION_REQUIRED';
+    if (refund.status === 'SUCCEEDED' && input.status === 'SUCCEEDED' && refund.provider_refund_id === input.providerRefundId) return 'SUCCEEDED';
+    if (refund.status !== 'PROCESSING') return 'RECONCILIATION_REQUIRED';
     let status = input.status;
     let providerRefundId = input.providerRefundId;
     let failureCode = input.failureCode;
@@ -133,5 +151,5 @@ export class PostgresCancellationRefundRepository implements CancellationReposit
 }
 
 function decision(row: Record<string, unknown>): CancellationDecision {
-  return { id:String(row.id),appointmentId:String(row.appointment_id),actorAccountId:String(row.actor_account_id),idempotencyKey:String(row.idempotency_key),requestFingerprint:String(row.request_fingerprint),previousStatus:row.previous_appointment_status as AppointmentStatus,allocationSnapshotId:String(row.financial_allocation_snapshot_id),paymentId:row.payment_id ? String(row.payment_id) : null,refundOutcome:row.refund_outcome as RefundOutcome,refundAmountMinor:BigInt(String(row.refund_amount_minor)),currency:String(row.currency),capacityReleased:Boolean(row.capacity_released),settlementConsequence:row.settlement_consequence as SettlementConsequence,refundPolicyVersionId:String(row.refund_policy_version_id),refundId:null };
+  return { id:String(row.id),appointmentId:String(row.appointment_id),actorAccountId:String(row.actor_account_id),idempotencyKey:String(row.idempotency_key),requestFingerprint:String(row.request_fingerprint),previousStatus:row.previous_appointment_status as AppointmentStatus,allocationSnapshotId:String(row.financial_allocation_snapshot_id),paymentId:row.payment_id ? String(row.payment_id) : null,refundOutcome:row.refund_outcome as RefundOutcome,refundAmountMinor:BigInt(String(row.refund_amount_minor)),currency:String(row.currency),capacityReleased:Boolean(row.capacity_released),settlementConsequence:row.settlement_consequence as SettlementConsequence,refundPolicyVersionId:String(row.refund_policy_version_id),refundId:row.refund_id ? String(row.refund_id) : null };
 }

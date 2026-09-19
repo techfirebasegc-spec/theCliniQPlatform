@@ -1,6 +1,6 @@
 import { createIdentifier } from '../../shared/identifiers/uuid.js';
 import type { AuditEventInput } from '../audit/audit.js';
-import type { PaymentProvider } from '../financial/provider.js';
+import { ProviderOperationError, type PaymentProvider } from '../financial/provider.js';
 import type { PostgresExecutor } from '../sessions/postgres-session-repository.js';
 import type { AppointmentAuthorizationService } from './appointment-authorization.js';
 import type { AppointmentStatus } from './appointment-foundation.js';
@@ -119,6 +119,7 @@ export class CancellationService {
 export interface RefundExecutionRepository {
   transaction<T>(operation: (database: PostgresExecutor) => Promise<T>): Promise<T>;
   claimRefund(database: PostgresExecutor, refundId: string): Promise<{ refund: { id: string; status: string; paymentProviderId: string; providerKey: string; idempotencyKey: string; amountMinor: bigint; currency: string }; attempt: { id: string; attemptNumber: number } | null } | null>;
+  recordProviderRefund(database: PostgresExecutor, input: { refundId: string; attemptId: string; providerRefundId: string }): Promise<'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'>;
   finalizeRefund(database: PostgresExecutor, input: { refundId: string; attemptId: string; status: 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; providerRefundId?: string; failureCode?: string }): Promise<'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'>;
   appendAudit(database: PostgresExecutor, event: AuditEventInput): Promise<string>;
 }
@@ -136,20 +137,36 @@ export class RefundExecutionService {
     }
     try {
       const response = await this.provider.createRefund({ providerPaymentId: claim.refund.paymentProviderId, idempotencyKey: claim.refund.idempotencyKey, amountMinor: claim.refund.amountMinor, currency: claim.refund.currency });
+      if (response.providerPaymentId !== claim.refund.paymentProviderId || response.amountMinor !== claim.refund.amountMinor || response.currency !== claim.refund.currency) {
+        await this.repository.transaction(async (database) => this.repository.finalizeRefund(database, { refundId: claim.refund.id, attemptId: claim.attempt!.id, status: 'RECONCILIATION_REQUIRED', failureCode: 'PROVIDER_FACT_MISMATCH' }));
+        return { status: 'RECONCILIATION_REQUIRED' };
+      }
+      if (response.status === 'PROCESSING') {
+        const status = await this.repository.transaction((database) => this.repository.recordProviderRefund(database, { refundId: claim.refund.id, attemptId: claim.attempt!.id, providerRefundId: response.providerRefundId }));
+        if (status === 'RECONCILIATION_REQUIRED') await this.repository.transaction(async (database) => {
+          await this.repository.finalizeRefund(database, { refundId: claim.refund.id, attemptId: claim.attempt!.id, status: 'RECONCILIATION_REQUIRED', failureCode: 'PROVIDER_FACT_CONFLICT' });
+          await this.repository.appendAudit(database, { category: 'BUSINESS', eventType: 'APPOINTMENT_REFUND_RECONCILIATION_REQUIRED', targetType: 'REFUND', targetId: claim.refund.id, outcome: 'FAILURE' });
+        });
+        return { status };
+      }
+      const terminalStatus = response.status === 'SUCCEEDED' ? 'SUCCEEDED' : 'FAILED';
       const finalized = await this.repository.transaction(async (database) => {
-        const status = await this.repository.finalizeRefund(database, { refundId: claim.refund.id, attemptId: claim.attempt!.id, status: 'SUCCEEDED', providerRefundId: response.providerRefundId });
+        const status = await this.repository.finalizeRefund(database, { refundId: claim.refund.id, attemptId: claim.attempt!.id, status: terminalStatus, providerRefundId: response.providerRefundId });
         await this.repository.appendAudit(database, status === 'SUCCEEDED'
           ? { category: 'BUSINESS', eventType: 'APPOINTMENT_REFUND_SUCCEEDED', targetType: 'REFUND', targetId: claim.refund.id, outcome: 'SUCCESS' }
-          : { category: 'BUSINESS', eventType: 'APPOINTMENT_REFUND_RECONCILIATION_REQUIRED', targetType: 'REFUND', targetId: claim.refund.id, outcome: 'FAILURE' });
+          : status === 'FAILED'
+            ? { category: 'BUSINESS', eventType: 'APPOINTMENT_REFUND_FAILED', targetType: 'REFUND', targetId: claim.refund.id, outcome: 'FAILURE' }
+            : { category: 'BUSINESS', eventType: 'APPOINTMENT_REFUND_RECONCILIATION_REQUIRED', targetType: 'REFUND', targetId: claim.refund.id, outcome: 'FAILURE' });
         return status;
       });
       return { status: finalized };
-    } catch {
+    } catch (error) {
       await this.repository.transaction(async (database) => {
-        await this.repository.finalizeRefund(database, { refundId: claim.refund.id, attemptId: claim.attempt!.id, status: 'RECONCILIATION_REQUIRED', failureCode: 'PROVIDER_OUTCOME_UNCONFIRMED' });
-        await this.repository.appendAudit(database, { category: 'BUSINESS', eventType: 'APPOINTMENT_REFUND_RECONCILIATION_REQUIRED', targetType: 'REFUND', targetId: claim.refund.id, outcome: 'FAILURE' });
+        const status = error instanceof ProviderOperationError && error.code === 'PROVIDER_REJECTED' ? 'FAILED' : 'RECONCILIATION_REQUIRED';
+        await this.repository.finalizeRefund(database, { refundId: claim.refund.id, attemptId: claim.attempt!.id, status, failureCode: status === 'FAILED' ? 'PROVIDER_REJECTED' : 'PROVIDER_OUTCOME_UNCONFIRMED' });
+        await this.repository.appendAudit(database, { category: 'BUSINESS', eventType: status === 'FAILED' ? 'APPOINTMENT_REFUND_FAILED' : 'APPOINTMENT_REFUND_RECONCILIATION_REQUIRED', targetType: 'REFUND', targetId: claim.refund.id, outcome: 'FAILURE' });
       });
-      return { status: 'RECONCILIATION_REQUIRED' };
+      return { status: error instanceof ProviderOperationError && error.code === 'PROVIDER_REJECTED' ? 'FAILED' : 'RECONCILIATION_REQUIRED' };
     }
   }
 }

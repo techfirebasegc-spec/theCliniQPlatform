@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
+import { PostgresCancellationRefundRepository } from '../src/modules/appointments/postgres-cancellation-refund-repository.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 const enabled = Boolean(databaseUrl);
@@ -78,6 +79,19 @@ describe.skipIf(!enabled)('theCliniQ Phase 5.5 PostgreSQL cancellation/refund gu
     await expect(expectRefundReferenceCommit('WRONG_ENTITY')).rejects.toThrow(/provider reference evidence is inconsistent/);
     await expect(expectRefundReferenceCommit('DUPLICATE')).rejects.toThrow();
   });
+
+  it('serializes concurrent refund claims into one durable provider attempt', async () => {
+    const refundId = await seedExecutionRefund();
+    const repository = new PostgresCancellationRefundRepository({
+      query: (...input) => pool!.query(...input), ping: async () => undefined, close: async () => undefined,
+      transaction: async (operation) => { const client = await pool!.connect(); try { await client.query('BEGIN'); const value = await operation(client); await client.query('COMMIT'); return value; } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); } },
+    });
+    const claims = await Promise.all([repository.transaction((database) => repository.claimRefund(database, refundId)), repository.transaction((database) => repository.claimRefund(database, refundId))]);
+    expect(claims.filter((claim) => claim?.attempt)).toHaveLength(1);
+    expect(claims.filter((claim) => !claim?.attempt).map((claim) => claim?.refund.status)).toEqual(['PROCESSING']);
+    const attempts = await pool!.query<{ attempts: string; status: string }>('SELECT count(*)::text AS attempts,max(status) AS status FROM refund_attempts WHERE refund_id=$1', [refundId]);
+    expect(attempts.rows[0]).toEqual({ attempts: '1', status: 'CLAIMED' });
+  });
 });
 
 type DecisionCase = { paymentFactCount: 0 | 1 | 2; decisionPayment: 'NULL' | 'MATCHING' | 'WRONG' };
@@ -133,6 +147,16 @@ async function expectRefundReferenceCommit(mode: 'MATCHING' | 'MISSING' | 'WRONG
     await client.query('ROLLBACK').catch(() => undefined);
     client.release();
   }
+}
+
+async function seedExecutionRefund(): Promise<string> {
+  const account = randomUUID(), allocation = randomUUID(), paymentIntent = randomUUID(), payment = randomUUID(), refund = randomUUID();
+  await pool!.query("INSERT INTO accounts (id,status) VALUES ($1,'ACTIVE')", [account]);
+  await pool!.query("INSERT INTO financial_allocation_snapshots (id,status,currency,gross_amount_minor,calculation_basis,input_data,selected_rule_versions,created_by_account_id) VALUES ($1,'FINAL','INR',1200,'FIXED','{}'::jsonb,'[]'::jsonb,$2)", [allocation, account]);
+  await pool!.query("INSERT INTO payment_intents (id,provider_key,status,currency,amount_minor,allocation_snapshot_id,idempotency_key,created_by_account_id) VALUES ($1,'RAZORPAY','SUCCEEDED','INR',1200,$2,$3,$4)", [paymentIntent, allocation, `execution-pi-${paymentIntent}`, account]);
+  await pool!.query("INSERT INTO payments (id,payment_intent_id,provider_key,provider_payment_id,status,currency,amount_minor) VALUES ($1,$2,'RAZORPAY',$3,'SUCCEEDED','INR',1200)", [payment, paymentIntent, `payment-${payment}`]);
+  await pool!.query("INSERT INTO refunds (id,payment_id,allocation_snapshot_id,provider_key,status,currency,amount_minor,idempotency_key,created_by_account_id) VALUES ($1,$2,$3,'RAZORPAY','REQUESTED','INR',1200,$4,$5)", [refund, payment, allocation, `execution-refund-${refund}`, account]);
+  return refund;
 }
 
 async function seedAppointment(client: import('pg').PoolClient) {

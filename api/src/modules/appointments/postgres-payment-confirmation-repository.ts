@@ -87,6 +87,7 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
       if (matches.length !== 1) return this.reconcileRefund(db, event.id, providerKey, null, matches.length === 0 ? 'REFUND_CORRELATION_NOT_FOUND' : 'REFUND_CORRELATION_AMBIGUOUS');
       const refundId = String(matches[0].id);
       if (String(matches[0].status)==='SUCCEEDED' && String(matches[0].provider_refund_id)===fact.refundId) { await this.process(db,event.id); return { status: 'REPLAYED' }; }
+      if (String(matches[0].status) === 'FAILED') return this.reconcileRefund(db, event.id, providerKey, refundId, 'REFUND_STATE_CONFLICT');
       if (matches[0].provider_refund_id && String(matches[0].provider_refund_id) !== fact.refundId) {
         return this.reconcileRefund(db, event.id, providerKey, refundId, 'REFUND_PROVIDER_FACT_CONFLICT');
       }

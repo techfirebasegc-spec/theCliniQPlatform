@@ -1,16 +1,18 @@
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { registerErrorHandler } from '../src/middleware/errors.js';
-import type { CancellationService } from '../src/modules/appointments/cancellation-refunds.js';
+import type { CancellationService, RefundExecutionService } from '../src/modules/appointments/cancellation-refunds.js';
 import { hashSessionSecret, type SessionAuthenticatorRepository } from '../src/modules/sessions/session.js';
 import { registerAppointmentCancellationRoutes } from '../src/routes/appointment-cancellations.js';
 
-function setup() {
+function setup(refundId: string | null = null) {
   const calls: unknown[][] = [];
-  const cancellations = { cancel: async (...input: unknown[]) => { calls.push(input); return { decision: { id: 'decision-a', refundAmountMinor: 100 }, replayed: false }; } } as unknown as CancellationService;
+  const execution: string[] = [];
+  const cancellations = { cancel: async (...input: unknown[]) => { calls.push(input); return { decision: { id: 'decision-a', refundAmountMinor: 100, refundId }, replayed: false }; } } as unknown as CancellationService;
+  const refunds = { execute: async (id: string) => { execution.push(id); return { status: 'PROCESSING' as const }; } } as unknown as RefundExecutionService;
   const sessions: SessionAuthenticatorRepository = { findBySecretHash: async (hash) => hash === hashSessionSecret('secret') ? { id: 'session', accountId: 'patient-a', status: 'ACTIVE', idleExpiresAt: new Date('2031-01-01T00:00:00Z'), absoluteExpiresAt: new Date('2031-01-01T00:00:00Z') } : null, touch: async () => ({ updated: true }) };
-  const app = Fastify(); registerErrorHandler(app); void app.register(async (instance) => registerAppointmentCancellationRoutes(instance, { cancellations, sessions, sessionPolicy: { idleTtlSeconds: 600, absoluteTtlSeconds: 3600 } }));
-  return { app, calls };
+  const app = Fastify(); registerErrorHandler(app); void app.register(async (instance) => registerAppointmentCancellationRoutes(instance, { cancellations, refunds, sessions, sessionPolicy: { idleTtlSeconds: 600, absoluteTtlSeconds: 3600 } }));
+  return { app, calls, execution };
 }
 
 describe('theCliniQ Phase 5.5 cancellation route', () => {
@@ -24,5 +26,10 @@ describe('theCliniQ Phase 5.5 cancellation route', () => {
   it('requires a valid server session', async () => {
     const { app } = setup(); const response = await app.inject({ method: 'POST', url: '/v1/appointments/appointment-a/cancellations', payload: { reason: 'PATIENT_REQUEST', idempotencyKey: 'cancel-a' } });
     expect(response.statusCode).toBe(401); await app.close();
+  });
+  it('executes only the server-created refund after cancellation has completed', async () => {
+    const { app, execution } = setup('refund-a');
+    const response = await app.inject({ method: 'POST', url: '/v1/appointments/appointment-a/cancellations', headers: { cookie: 'cliniq_session=session.secret' }, payload: { reason: 'PATIENT_REQUEST', idempotencyKey: 'cancel-a' } });
+    expect(response.statusCode).toBe(201); expect(execution).toEqual(['refund-a']); await app.close();
   });
 });
