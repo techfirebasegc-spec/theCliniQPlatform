@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | P5-B01 | Service Offering ownership/assignment architecture | **APPROVED / RESOLVED** | Exact-one doctor-or-clinic ownership, explicit FK/check enforcement, and non-transferring future clinic assignment/publication are locked by P5-A09. Publication/moderation and a clinic's exposure of doctor-owned offerings remain later business decisions. |
 | P5-B02 | Availability configuration vocabulary | **APPROVED / RESOLVED** | The versioned vocabulary and IANA/local-time model are locked by P5-A10. Concrete values and recurrence/holiday/exception vocabulary remain business configuration inputs; no defaults are implied. |
-| P5-B03 | `BOOK` and `REFER` workflow mechanics | NEEDS BUSINESS DECISION | Proposal/acceptance/revocation/re-grant semantics, actor authority, and whether a clinic action creates a patient-facing context. |
+| P5-B03 | `BOOK` and `REFER` workflow mechanics | **APPROVED / IMPLEMENTATION PENDING** | Phase 5.8 Decisions 1–5 approve Patient delegated-booking, referral lifecycle/authority/privacy, and the shared `FIXED_SLOT`/`QUEUE` policy boundary. Decision 6 approves the exact immutable entity model, restrictive/deferred guards, Queue Window authority, canonical lock order, and Phase 4 referral-retention/legal-hold compatibility extension. The [Network Booking and Clinic-to-Clinic Referral decision matrix](phase5-network-booking-referral-decision-matrix.md) is implementation-ready; no network/referral booking behavior exists until its migration and service/tests are implemented. |
 | P5-B04 | Cancellation timing and category semantics | NEEDS BUSINESS DECISION | Eligible states/windows and patient/doctor/clinic/platform/no-show/provider-unavailable categories; no financial values are selected. |
 | P5-B05 | Reschedule product policy | NEEDS BUSINESS DECISION | Whether service/provider/context changes are allowed and customer communication/credit behavior. |
 | P5-B06 | Completion evidence | NEEDS BUSINESS DECISION | Required doctor/clinic evidence and any future staff authority configuration. |
@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | P5-L01 | Refund/reschedule commercial treatment | Configurable refund percentages, tax/fee/commission and provider-payable effects, with accounting approval. |
 | P5-L02 | Provider/payment consequences | Razorpay/provider confirmation for additional payment, refund, credit, and reconciliation effects. |
-| P5-L03 | Health/location privacy and referral consent | Consent, disclosure, retention, and destination-visibility legal policy. |
+| P5-L03 | Health/location privacy and referral consent | Phase 5.8 Decision 4 approves the narrow Clinic→Clinic referral disclosure/retention boundary. Broader health/location privacy and any future clinical-data-sharing consent remain separate decisions. |
 | P5-L04 | Exceptional platform intervention | Least-privilege legal/audit requirements for support/admin cancellation or correction. |
 
 ## C. Technical decisions resolvable during implementation
@@ -62,9 +62,10 @@
    only the remaining P5-B03–P5-B07 and P5-L01–P5-L04 that apply to the
    intended implementation slice. Concrete availability values are later
    configuration inputs, not an authorization to invent defaults.
-2. Approve a concrete `BOOK` capability workflow before any Clinic→Doctor
-   booking implementation, and a separate `REFER`/consent workflow before
-   Clinic→Clinic referral work.
+2. Phase 5.8 Decisions 1–6 are architecture-approved. Before any
+   Clinic→Doctor booking or Clinic→Clinic referral implementation, use its
+   immutable schema, lock order, PostgreSQL verification, and least-privilege
+   requirements exactly; do not treat architecture approval as deployed behavior.
 3. The Service Offering ownership/version architecture is approved. Approve
    publication/moderation and clinic assignment/visibility policy before any
    clinic exposure of a doctor-owned offering.
