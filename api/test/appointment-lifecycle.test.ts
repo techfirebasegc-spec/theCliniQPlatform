@@ -8,6 +8,7 @@ class FakeLifecycleRepository implements AppointmentLifecycleRepository {
   public events: AppointmentEventWrite[] = [];
   public audits: AuditEventInput[] = [];
   public failEvent = false;
+  public operations: string[] = [];
 
   public constructor(status: AppointmentStatus | null) {
     this.appointment = status ? { id: 'appointment-1', status } : null;
@@ -20,10 +21,10 @@ class FakeLifecycleRepository implements AppointmentLifecycleRepository {
     try { return await operation({ query: undefined as never }); }
     catch (error) { this.appointment = before; this.events.splice(eventCount); this.audits.splice(auditCount); throw error; }
   }
-  public async lockAppointment(): Promise<LifecycleAppointment | null> { return this.appointment ? { ...this.appointment } : null; }
+  public async lockAppointment(): Promise<LifecycleAppointment | null> { this.operations.push('lock'); return this.appointment ? { ...this.appointment } : null; }
   public async transitionAppointment(_database: unknown, id: string, from: AppointmentStatus, to: AppointmentStatus): Promise<boolean> {
     if (!this.appointment || this.appointment.id !== id || this.appointment.status !== from) return false;
-    this.appointment.status = to;
+    this.operations.push('transition'); this.appointment.status = to;
     return true;
   }
   public async appendEvent(_database: unknown, event: AppointmentEventWrite): Promise<void> {
@@ -36,8 +37,8 @@ class FakeLifecycleRepository implements AppointmentLifecycleRepository {
   }
 }
 
-function request(action: 'CONFIRM' | 'PAYMENT_FAIL' | 'EXPIRE' | 'START' | 'COMPLETE' | 'CANCEL', expectedStatus: AppointmentStatus) {
-  return { appointmentId: 'appointment-1', action, expectedStatus, actorAccountId: 'actor-1', reason: 'approved test reason', context: { source: 'test' } };
+function request(action: 'CONFIRM' | 'PAYMENT_FAIL' | 'EXPIRE' | 'START' | 'COMPLETE' | 'CANCEL', expectedStatus: AppointmentStatus, authorizeInTransaction?: () => Promise<void>) {
+  return { appointmentId: 'appointment-1', action, expectedStatus, actorAccountId: 'actor-1', reason: 'approved test reason', context: { source: 'test' }, authorizeInTransaction };
 }
 
 describe('theCliniQ Phase 5 Step 5.2 appointment lifecycle service', () => {
@@ -51,7 +52,7 @@ describe('theCliniQ Phase 5 Step 5.2 appointment lifecycle service', () => {
     ['IN_PROGRESS', 'CANCEL', 'CANCELLED'],
   ] as const)('writes one immutable event for %s -> %s', async (from, action, to) => {
     const repository = new FakeLifecycleRepository(from);
-    const result = await new AppointmentLifecycleService(repository).transition(request(action, from));
+    const result = await new AppointmentLifecycleService(repository).transition(request(action, from, async () => { repository.operations.push('authorize'); }));
     expect(result).toMatchObject({ previousStatus: from, resultingStatus: to });
     expect(repository.appointment?.status).toBe(to);
     expect(repository.events).toHaveLength(1);
@@ -64,7 +65,7 @@ describe('theCliniQ Phase 5 Step 5.2 appointment lifecycle service', () => {
     ['CONFIRMED', 'COMPLETE'], ['CONFIRMED', 'CONFIRM'], ['IN_PROGRESS', 'CONFIRM'], ['IN_PROGRESS', 'EXPIRE'],
   ] as const)('rejects forbidden %s -> %s without an event', async (from, action) => {
     const repository = new FakeLifecycleRepository(from);
-    await expect(new AppointmentLifecycleService(repository).transition(request(action, from))).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+    await expect(new AppointmentLifecycleService(repository).transition(request(action, from, async () => {}))).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
     expect(repository.events).toHaveLength(0);
   });
 
@@ -89,6 +90,22 @@ describe('theCliniQ Phase 5 Step 5.2 appointment lifecycle service', () => {
     await service.transition(request('CONFIRM', 'PAYMENT_PENDING'));
     await expect(service.transition(request('CONFIRM', 'PAYMENT_PENDING'))).rejects.toMatchObject({ code: 'STALE_TRANSITION' });
     expect(repository.events).toHaveLength(1);
+  });
+
+  it('requires transaction-time authorization after the lifecycle lock for Start and Complete', async () => {
+    const repository = new FakeLifecycleRepository('CONFIRMED');
+    await new AppointmentLifecycleService(repository).transition(request('START', 'CONFIRMED', async () => { repository.operations.push('authorize'); }));
+    expect(repository.operations).toEqual(['lock', 'authorize', 'transition']);
+
+    await expect(new AppointmentLifecycleService(new FakeLifecycleRepository('CONFIRMED')).transition(request('START', 'CONFIRMED'))).rejects.toMatchObject({ code: 'AUTHORIZATION_REQUIRED' });
+  });
+
+  it('does not transition or write evidence when transaction-time authorization is denied', async () => {
+    const repository = new FakeLifecycleRepository('IN_PROGRESS');
+    await expect(new AppointmentLifecycleService(repository).transition(request('COMPLETE', 'IN_PROGRESS', async () => { throw new Error('FORBIDDEN'); }))).rejects.toThrow('FORBIDDEN');
+    expect(repository.appointment?.status).toBe('IN_PROGRESS');
+    expect(repository.events).toHaveLength(0);
+    expect(repository.audits).toHaveLength(0);
   });
 
   it('reports missing appointments deterministically', async () => {

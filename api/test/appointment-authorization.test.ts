@@ -19,7 +19,7 @@ class Repository implements AppointmentAuthorizationRepository {
 }
 
 function setup() {
-  const repository = new Repository(); const audit: unknown[] = []; const permissions = new Set(['owner:tenant-a:appointment.view', 'owner:tenant-a:appointment.complete', 'owner:tenant-a:appointment.cancel', 'owner:tenant-a:appointment.reschedule', 'admin:tenant-a:appointment.view', 'admin:tenant-a:appointment.complete', 'admin:tenant-a:appointment.cancel', 'admin:tenant-a:appointment.reschedule', 'staff:tenant-a:appointment.view']);
+  const repository = new Repository(); const audit: unknown[] = []; const permissions = new Set(['owner:tenant-a:appointment.view', 'owner:tenant-a:appointment.start', 'owner:tenant-a:appointment.complete', 'owner:tenant-a:appointment.cancel', 'owner:tenant-a:appointment.reschedule', 'admin:tenant-a:appointment.view', 'admin:tenant-a:appointment.start', 'admin:tenant-a:appointment.complete', 'admin:tenant-a:appointment.cancel', 'admin:tenant-a:appointment.reschedule', 'staff:tenant-a:appointment.view']);
   const require = async (account: string, tenant: string, permission: string) => { if (!permissions.has(`${account}:${tenant}:${permission}`)) throw new Error('FORBIDDEN'); return { id: 'membership', accountId: account, tenantId: tenant, role: 'CLINIC_STAFF' as const, status: 'ACTIVE' as const }; };
   const context = { require, requireInTransaction: async (_db: unknown, account: string, tenant: string, permission: string) => require(account, tenant, permission) };
   return { repository, audit, permissions, service: new AppointmentAuthorizationService(repository, context, { append: async (event) => { audit.push(event); } }) };
@@ -61,6 +61,15 @@ describe('theCliniQ Phase 5.4 appointment operational access', () => {
     await expect(service.authorize('admin', 'appointment-clinic', 'appointment.cancel')).resolves.toEqual(patientClinic);
     permissions.delete('staff:tenant-a:appointment.view');
     await expect(service.authorize('staff', 'appointment-clinic', 'appointment.view')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('allows only Clinic Owner/Admin to start or complete clinic appointments', async () => {
+    const { service } = setup();
+    await expect(service.authorize('owner', 'appointment-clinic', 'appointment.start')).resolves.toEqual(patientClinic);
+    await expect(service.authorize('admin', 'appointment-clinic', 'appointment.start')).resolves.toEqual(patientClinic);
+    await expect(service.authorize('owner', 'appointment-clinic', 'appointment.complete')).resolves.toEqual(patientClinic);
+    await expect(service.authorize('staff', 'appointment-clinic', 'appointment.start')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(service.authorize('staff', 'appointment-clinic', 'appointment.complete')).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('does not grant ordinary access to support, IDs, tenant context, or missing authentication', async () => {

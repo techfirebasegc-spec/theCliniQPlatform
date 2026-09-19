@@ -46,6 +46,9 @@ import { PostgresCancellationRefundRepository } from './modules/appointments/pos
 import { RescheduleService } from './modules/appointments/rescheduling.js';
 import { PostgresRescheduleRepository } from './modules/appointments/postgres-rescheduling-repository.js';
 import { registerAppointmentRescheduleRoutes } from './routes/appointment-reschedules.js';
+import { registerAppointmentOperationRoutes } from './routes/appointment-operations.js';
+import { AppointmentLifecycleService } from './modules/appointments/appointment-lifecycle.js';
+import { PostgresAppointmentLifecycleRepository } from './modules/appointments/postgres-appointment-lifecycle-repository.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -75,6 +78,7 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   const audit = new PostgresAuditRepository(services.database);
   const memberships = new PostgresMembershipRepository(services.database);
   const context = new TenantContextService(memberships, audit);
+  const appointmentAuthorization = new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit);
   void app.register(async (instance) => registerClinicRoutes(instance, { clinics: new TenantClinicService(new PostgresTenantRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerMembershipRoutes(instance, { memberships: new MembershipService(memberships, context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerNetworkRoutes(instance, { network: new NetworkService(new PostgresNetworkRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
@@ -97,6 +101,11 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   }));
   void app.register(async (instance) => registerAppointmentRescheduleRoutes(instance, {
     reschedules: new RescheduleService(new PostgresAppointmentRepository(services.database), new PostgresRescheduleRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)),
+    sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+  }));
+  void app.register(async (instance) => registerAppointmentOperationRoutes(instance, {
+    lifecycle: new AppointmentLifecycleService(new PostgresAppointmentLifecycleRepository(services.database)),
+    authorization: appointmentAuthorization,
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
 

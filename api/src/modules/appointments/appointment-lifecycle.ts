@@ -11,6 +11,9 @@ export interface AppointmentTransitionRequest {
   actorAccountId?: string;
   reason?: string;
   context?: Record<string, string | number | boolean | null>;
+  /** Required for the sensitive operational transitions. It runs after the
+   * appointment row is locked, on the same transaction executor. */
+  authorizeInTransaction?: (database: PostgresExecutor) => Promise<void>;
 }
 export interface LifecycleAppointment { id: string; status: AppointmentStatus; }
 export interface AppointmentEventWrite {
@@ -34,7 +37,7 @@ export interface AppointmentLifecycleRepository {
 }
 
 export class AppointmentLifecycleError extends Error {
-  public constructor(public readonly code: 'APPOINTMENT_NOT_FOUND' | 'INVALID_TRANSITION' | 'TERMINAL_APPOINTMENT' | 'STALE_TRANSITION' | 'EVENT_CONFLICT') {
+  public constructor(public readonly code: 'APPOINTMENT_NOT_FOUND' | 'INVALID_TRANSITION' | 'TERMINAL_APPOINTMENT' | 'STALE_TRANSITION' | 'EVENT_CONFLICT' | 'AUTHORIZATION_REQUIRED') {
     super(code);
     this.name = 'AppointmentLifecycleError';
   }
@@ -53,6 +56,11 @@ export class AppointmentLifecycleService {
     return this.repository.transaction(async (database) => {
       const appointment = await this.repository.lockAppointment(database, request.appointmentId);
       if (!appointment) throw new AppointmentLifecycleError('APPOINTMENT_NOT_FOUND');
+      const sensitiveOperation = request.action === 'START' || request.action === 'COMPLETE';
+      if (sensitiveOperation && !request.authorizeInTransaction) {
+        throw new AppointmentLifecycleError('AUTHORIZATION_REQUIRED');
+      }
+      if (sensitiveOperation) await request.authorizeInTransaction!(database);
       if (terminal(appointment.status)) throw new AppointmentLifecycleError('TERMINAL_APPOINTMENT');
       if (appointment.status !== request.expectedStatus) throw new AppointmentLifecycleError('STALE_TRANSITION');
       if (!canTransitionAppointment(appointment.status, target.status)) throw new AppointmentLifecycleError('INVALID_TRANSITION');
