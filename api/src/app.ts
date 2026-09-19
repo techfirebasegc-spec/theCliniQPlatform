@@ -26,6 +26,9 @@ import { AvailabilityService } from './modules/availability/availability.js';
 import { AppointmentService } from './modules/appointments/appointments.js';
 import { PostgresAppointmentRepository } from './modules/appointments/postgres-appointment-repository.js';
 import { registerAppointmentIntentRoutes } from './routes/appointment-intents.js';
+import { registerDelegatedBookingRoutes } from './routes/delegated-bookings.js';
+import { DelegatedBookingService } from './modules/appointments/delegated-bookings.js';
+import { PostgresDelegatedBookingRepository } from './modules/appointments/postgres-delegated-booking-repository.js';
 import { registerServiceExposureRoutes } from './routes/service-exposures.js';
 import { PostgresServiceExposureRepository } from './modules/service-exposures/postgres-service-exposure-repository.js';
 import { ServiceExposureService } from './modules/service-exposures/service-exposures.js';
@@ -92,6 +95,10 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
     appointments: new AppointmentService(new PostgresAppointmentRepository(services.database), audit),
     handoffs: new PaymentHandoffService(new PostgresPaymentHandoffRepository(services.database), resolvePaymentProviderKey(environment.PAYMENT_PROVIDER_KEY)),
     provisioning: new PaymentOrderProvisioningService(new PostgresPaymentOrderProvisioningRepository(services.database), paymentProvider, environment.PAYMENT_ORDER_PROVISIONING_LEASE_SECONDS),
+    sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+  }));
+  void app.register(async (instance) => registerDelegatedBookingRoutes(instance, {
+    bookings: new DelegatedBookingService(new PostgresDelegatedBookingRepository(services.database), audit),
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
   void app.register(async (instance) => registerRazorpayWebhookRoutes(instance, { confirmation: paymentProvider ? new PaymentConfirmationService(paymentProvider, new PostgresPaymentConfirmationRepository(services.database)) : undefined }));

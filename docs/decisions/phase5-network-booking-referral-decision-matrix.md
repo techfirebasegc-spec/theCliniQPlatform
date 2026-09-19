@@ -197,6 +197,47 @@ be included as server-derived booking-context evidence only; it cannot rewrite
 allocation, price, payment, refund, or settlement facts. Settlement remains
 eligible only after the existing Appointment completion boundary.
 
+### Decision 7 — Clinic-originated payment authority
+
+**Status: APPROVED — runtime implementation pending.** For a valid
+clinic-originated Appointment Intent, `patient_account_id` remains the sole
+payer and payment authority. `booking_actor_account_id` remains the immutable
+Clinic executor snapshot; it does not identify the payer and does not grant
+financial authority.
+
+| Operation | Authorized actor | Required boundary |
+| --- | --- | --- |
+| Create or replay Payment Handoff | The authenticated Patient payer only | The locked Intent must identify that Account as `patient_account_id`; the Handoff retains the immutable `booking_actor_account_id` snapshot. |
+| Claim or replay provider payment-order provisioning | The authenticated Patient payer only | The provider-facing operation uses the same locked Patient/Intent/payment evidence and payer-scoped idempotency boundary. |
+| Provider/webhook confirmation | Authenticated, reconciled provider fact only | A provider fact is not Clinic authority and does not grant the Clinic payment access. |
+
+Clinic Owner, Admin, Staff, and every other booking actor have no payment
+authority merely because they created the authorized booking or hold `BOOK` or
+`REFER` authority. Delegated booking authority never implies financial
+authority, and this decision creates no financial-delegation mechanism.
+
+Payment idempotency for clinic-originated bookings is scoped to the
+authenticated Patient payer, Appointment Intent, operation, and opaque client
+idempotency key. Existing direct Patient booking behavior remains unchanged.
+The current direct-only payment-handoff implementation remains in place until
+the runtime implementation extends it under this authority model.
+
+The approved runtime sequence is:
+
+```text
+Clinic creates authorized Appointment Intent
+        ↓
+Patient completes payment
+        ↓
+Patient creates/replays Payment Handoff
+        ↓
+Patient claims/replays provider payment order
+        ↓
+Provider facts confirm payment
+        ↓
+Existing Appointment confirmation flow
+```
+
 ## P5.8-NB-05 — Concurrency, idempotency, and revocation
 
 PostgreSQL is the sole transactional authority; Redis may cache only.
