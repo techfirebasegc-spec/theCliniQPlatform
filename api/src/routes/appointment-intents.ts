@@ -2,9 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { AppointmentError, type AppointmentIntentInput, type AppointmentService } from '../modules/appointments/appointments.js';
 import { type PaymentHandoffInput, type PaymentHandoffService } from '../modules/appointments/payment-handoffs.js';
 import { PaymentOrderProvisioningError, type PaymentOrderProvisioningService } from '../modules/appointments/payment-order-provisioning.js';
+import { PaymentConfirmationError, PaymentRecoveryError, type PaymentConfirmationService } from '../modules/appointments/payment-confirmation.js';
 import { authenticateSession, sessionCookieName, type SessionAuthenticatorRepository, type SessionPolicy } from '../modules/sessions/session.js';
 
-export async function registerAppointmentIntentRoutes(app: FastifyInstance, dependencies: { appointments: AppointmentService; handoffs?: PaymentHandoffService; provisioning?: PaymentOrderProvisioningService; sessions: SessionAuthenticatorRepository; sessionPolicy: SessionPolicy }): Promise<void> {
+export async function registerAppointmentIntentRoutes(app: FastifyInstance, dependencies: { appointments: AppointmentService; handoffs?: PaymentHandoffService; provisioning?: PaymentOrderProvisioningService; confirmation?: PaymentConfirmationService; sessions: SessionAuthenticatorRepository; sessionPolicy: SessionPolicy }): Promise<void> {
   app.post('/v1/appointment-intents', async (request, reply) => reply.code(201).send(await dependencies.appointments.create(await account(request.headers.cookie, dependencies), input(request.body))));
   app.post('/v1/appointment-intents/:intentId/reserve', async (request, reply) => reply.code(201).send(await dependencies.appointments.reserve(await account(request.headers.cookie, dependencies), (request.params as { intentId: string }).intentId)));
   app.post('/v1/slot-reservations/:reservationId/release', async (request, reply) => { await dependencies.appointments.release(await account(request.headers.cookie, dependencies), (request.params as { reservationId: string }).reservationId); return reply.code(204).send(); });
@@ -20,6 +21,11 @@ export async function registerAppointmentIntentRoutes(app: FastifyInstance, depe
       if (error instanceof PaymentOrderProvisioningError && error.code === 'PROVIDER_NOT_CONFIGURED') return reply.code(503).send({ error: { code: error.code, message: 'Payment provider is not configured.' } });
       throw error;
     }
+  });
+  app.post('/v1/appointment-intents/:intentId/payment-recovery', async (request, reply) => {
+    if (!dependencies.confirmation) return reply.code(503).send({ error: { code: 'PROVIDER_NOT_CONFIGURED', message: 'Payment provider is not configured.' } });
+    try { return reply.code(200).send(await dependencies.confirmation.recover(await account(request.headers.cookie, dependencies), (request.params as { intentId: string }).intentId)); }
+    catch (error) { if (error instanceof PaymentRecoveryError) return reply.code(error.code === 'PROVIDER_UNAVAILABLE' ? 503 : error.code === 'UNAUTHORIZED' ? 401 : 409).send({ error: { code: error.code, message: error.code === 'PROVIDER_UNAVAILABLE' ? 'Payment provider is unavailable.' : 'Payment recovery could not be completed.' } }); if (error instanceof PaymentConfirmationError) return reply.code(409).send({ error: { code: error.code, message: 'Payment recovery could not be completed.' } }); throw error; }
   });
 }
 

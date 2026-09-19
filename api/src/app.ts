@@ -91,17 +91,19 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   const paymentProvider = environment.RAZORPAY_KEY_ID && environment.RAZORPAY_KEY_SECRET && environment.RAZORPAY_WEBHOOK_SECRET
     ? new RazorpayPaymentProvider(environment.RAZORPAY_KEY_ID, environment.RAZORPAY_KEY_SECRET, environment.RAZORPAY_WEBHOOK_SECRET)
     : undefined;
+  const confirmation = paymentProvider ? new PaymentConfirmationService(paymentProvider, new PostgresPaymentConfirmationRepository(services.database)) : undefined;
   void app.register(async (instance) => registerAppointmentIntentRoutes(instance, {
     appointments: new AppointmentService(new PostgresAppointmentRepository(services.database), audit),
     handoffs: new PaymentHandoffService(new PostgresPaymentHandoffRepository(services.database), resolvePaymentProviderKey(environment.PAYMENT_PROVIDER_KEY)),
     provisioning: new PaymentOrderProvisioningService(new PostgresPaymentOrderProvisioningRepository(services.database), paymentProvider, environment.PAYMENT_ORDER_PROVISIONING_LEASE_SECONDS),
+    confirmation,
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
   void app.register(async (instance) => registerDelegatedBookingRoutes(instance, {
     bookings: new DelegatedBookingService(new PostgresDelegatedBookingRepository(services.database), audit),
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
-  void app.register(async (instance) => registerRazorpayWebhookRoutes(instance, { confirmation: paymentProvider ? new PaymentConfirmationService(paymentProvider, new PostgresPaymentConfirmationRepository(services.database)) : undefined }));
+  void app.register(async (instance) => registerRazorpayWebhookRoutes(instance, { confirmation }));
   void app.register(async (instance) => registerAppointmentCancellationRoutes(instance, {
     cancellations: new CancellationService(new PostgresCancellationRefundRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)),
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },

@@ -62,6 +62,13 @@ export class PostgresPaymentConfirmationRepository implements PaymentConfirmatio
       return { status: 'CONFIRMED' };
     });
   }
+  public async recoveryContext(accountId: string, appointmentIntentId: string): Promise<{ providerKey: 'RAZORPAY'; providerOrderId: string } | null> {
+    const row = (await this.database.query<{ provider_key: string; provider_order_id: string }>(`SELECT payment.provider_key,payment.provider_order_id
+      FROM appointment_intents intent JOIN appointment_financial_handoffs handoff ON handoff.appointment_intent_id=intent.id
+      JOIN payment_intents payment ON payment.id=handoff.payment_intent_id
+      WHERE intent.id=$1 AND intent.patient_account_id=$2 AND payment.provider_key='RAZORPAY' AND payment.provider_order_id IS NOT NULL`, [appointmentIntentId, accountId])).rows[0];
+    return row ? { providerKey: 'RAZORPAY', providerOrderId: row.provider_order_id } : null;
+  }
 
   /** Refund webhooks converge with the durable refund claim; no appointment lifecycle lock is needed here. */
   public async confirmRefund(providerKey: 'RAZORPAY', providerEventId: string): Promise<{ status: 'REPLAYED' | 'RECONCILIATION_REQUIRED' | 'IGNORED' }> {

@@ -4,11 +4,12 @@ export interface PaymentProvider {
   readonly key: string;
   createOrder(input: { receipt: string; amountMinor: bigint; currency: string }): Promise<ProviderOrder>;
   findOrderByReceipt(input: { receipt: string }): Promise<ProviderOrder | null>;
-  verifyPayment(input: { providerPaymentId: string; providerOrderId?: string }): Promise<{ status: 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED' }>;
+  verifyPayment(input: { providerOrderId: string; providerPaymentId?: string }): Promise<VerifiedPayment>;
   verifyWebhook(input: { payload: string; signature: string }): boolean;
   createRefund(input: { providerPaymentId: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<{ providerRefundId: string }>;
   createSettlement(input: { beneficiaryReference: string; idempotencyKey: string; amountMinor: bigint; currency: string }): Promise<{ providerSettlementId: string }>;
 }
+export type VerifiedPayment = { status: 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; providerPaymentId: string | null; providerOrderId: string; amountMinor: bigint | null; currency: string | null };
 
 export interface ProviderOrder { providerOrderId: string; receipt: string; amountMinor: bigint; currency: string; }
 
@@ -31,7 +32,17 @@ export class RazorpayPaymentProvider implements PaymentProvider {
     if (matches.length > 1) throw new ProviderOperationError('PROVIDER_CONFLICT');
     return matches[0] ?? null;
   }
-  public async verifyPayment(input: { providerPaymentId: string; providerOrderId?: string }): Promise<{ status: 'SUCCEEDED' | 'FAILED' | 'RECONCILIATION_REQUIRED' }> { void input; throw new ProviderOperationUnavailable(); }
+  public async verifyPayment(input: { providerOrderId: string; providerPaymentId?: string }): Promise<VerifiedPayment> {
+    const response = input.providerPaymentId
+      ? await this.request(`/payments/${encodeURIComponent(input.providerPaymentId)}`)
+      : await this.request(`/orders/${encodeURIComponent(input.providerOrderId)}/payments`);
+    const candidates = input.providerPaymentId ? [payment(await json(response))] : array(object(await json(response)).items).map(payment);
+    const matching = candidates.filter((item) => item.providerOrderId === input.providerOrderId);
+    const captured = matching.filter((item) => item.status === 'captured');
+    if (captured.length > 1 || (captured.length === 0 && matching.length !== 1)) return { status: 'RECONCILIATION_REQUIRED', providerPaymentId: null, providerOrderId: input.providerOrderId, amountMinor: null, currency: null };
+    const value = captured[0] ?? matching[0];
+    return { status: value.status === 'captured' ? 'SUCCEEDED' : 'FAILED', providerPaymentId: value.providerPaymentId, providerOrderId: value.providerOrderId, amountMinor: value.amountMinor, currency: value.currency };
+  }
   public verifyWebhook(input: { payload: string; signature: string }): boolean {
     const expected = createHmac('sha256', this.webhookSecret).update(input.payload).digest('hex');
     const actual = Buffer.from(input.signature, 'hex'); const candidate = Buffer.from(expected, 'hex');
@@ -63,6 +74,11 @@ function order(value: unknown): ProviderOrder {
   const amount = body.amount;
   if (typeof body.id !== 'string' || typeof body.receipt !== 'string' || typeof body.currency !== 'string' || typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) throw new ProviderOperationError('PROVIDER_REJECTED');
   return { providerOrderId: body.id, receipt: body.receipt, amountMinor: BigInt(amount), currency: body.currency };
+}
+function payment(value: unknown): { providerPaymentId: string; providerOrderId: string; amountMinor: bigint; currency: string; status: string } {
+  const body = object(value); const amount = body.amount;
+  if (typeof body.id !== 'string' || typeof body.order_id !== 'string' || typeof body.currency !== 'string' || typeof body.status !== 'string' || typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) throw new ProviderOperationError('PROVIDER_REJECTED');
+  return { providerPaymentId: body.id, providerOrderId: body.order_id, amountMinor: BigInt(amount), currency: body.currency, status: body.status };
 }
 function object(value: unknown): Record<string, unknown> { if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>; throw new ProviderOperationError('PROVIDER_REJECTED'); }
 function array(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }

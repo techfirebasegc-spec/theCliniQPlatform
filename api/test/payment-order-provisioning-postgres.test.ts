@@ -28,7 +28,7 @@ class DeterministicProvider implements PaymentProvider {
   public async findOrderByReceipt({ receipt }: { receipt: string }) { this.lookupCalls += 1; return this.orders.get(receipt) ?? null; }
   public async createOrder(input: { receipt: string; amountMinor: bigint; currency: string }) { this.createCalls += 1; const existing = this.orders.get(input.receipt); if (existing) return existing; const order = { providerOrderId: this.orderId, ...input }; this.orders.set(input.receipt, order); return order; }
   public verifyWebhook({ payload, signature }: { payload: string; signature: string }) { return createHmac('sha256', webhookSecret).update(payload).digest('hex') === signature; }
-  public async verifyPayment() { return { status: 'SUCCEEDED' as const }; }
+  public async verifyPayment({ providerOrderId }: { providerOrderId: string }) { const order = [...this.orders.values()].find((value) => value.providerOrderId === providerOrderId); return order ? { status: 'SUCCEEDED' as const, providerPaymentId: `pay_recovery_${providerOrderId}`, providerOrderId, amountMinor: order.amountMinor, currency: order.currency } : { status: 'RECONCILIATION_REQUIRED' as const, providerPaymentId: null, providerOrderId, amountMinor: null, currency: null }; }
   public async createRefund() { throw new Error('out of scope'); }
   public async createSettlement() { throw new Error('out of scope'); }
 }
@@ -92,6 +92,16 @@ describe.skipIf(!enabled)('theCliniQ Phase 5 Step 5.3 real PostgreSQL provisioni
     await expect(confirmation.receiveRazorpayWebhook(mismatch, signature, webhookEventId(fixture.intent, 'mismatch'))).resolves.toEqual({ status: 'RECONCILIATION_REQUIRED' });
     const status = await pool!.query<{ payment: string; appointments: string }>(`SELECT payment.status AS payment,count(appointment.id)::text AS appointments FROM appointment_financial_handoffs handoff JOIN payment_intents payment ON payment.id=handoff.payment_intent_id LEFT JOIN appointments appointment ON appointment.appointment_intent_id=handoff.appointment_intent_id WHERE handoff.appointment_intent_id=$1 GROUP BY payment.status`, [fixture.intent]);
     expect(status.rows[0]).toEqual({ payment: 'RECONCILIATION_REQUIRED', appointments: '0' });
+  });
+
+  it('recovers a missed webhook once and converges with a concurrent webhook', async () => {
+    const fixture = await seed(pool!); const provider = new DeterministicProvider(providerOrderId(fixture.intent)); await handoff(databaseA!, fixture); await provisioning(databaseA!, provider).provision(fixture.patient, fixture.intent);
+    const recovery = confirm(databaseA!, provider); const raw = captured(`pay_recovery_${provider.orderId}`, provider.orderId, 10_000, 'INR'); const signature = createHmac('sha256', webhookSecret).update(raw).digest('hex');
+    const outcomes = await Promise.all([recovery.recover(fixture.patient, fixture.intent), confirm(databaseB!, provider).receiveRazorpayWebhook(raw, signature, webhookEventId(fixture.intent, 'late'))]);
+    expect(outcomes).toEqual(expect.arrayContaining([expect.objectContaining({ status: expect.stringMatching(/CONFIRMED|REPLAYED/) })]));
+    const counts = await pool!.query<{ payments: string; appointments: string; succeeded: string }>(`SELECT count(DISTINCT payment.id)::text AS payments,count(DISTINCT appointment.id)::text AS appointments,max(payment_intent.status) AS succeeded FROM appointment_financial_handoffs handoff JOIN payment_intents payment_intent ON payment_intent.id=handoff.payment_intent_id LEFT JOIN payments payment ON payment.payment_intent_id=payment_intent.id LEFT JOIN appointments appointment ON appointment.appointment_intent_id=handoff.appointment_intent_id WHERE handoff.appointment_intent_id=$1 GROUP BY handoff.appointment_intent_id`, [fixture.intent]);
+    expect(counts.rows[0]).toEqual({ payments: '1', appointments: '1', succeeded: 'SUCCEEDED' });
+    await expect(recovery.recover(fixture.patient, fixture.intent)).resolves.toEqual({ status: 'REPLAYED' });
   });
 
   it('authenticates raw HMAC at the actual webhook route before provider facts reach PostgreSQL', async () => {
