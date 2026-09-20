@@ -27,7 +27,7 @@ describe.skipIf(!databaseUrl)('Phase 7.1A PostgreSQL appointment chat lifecycle 
     const beforeCancellation = await chat.send({ conversationId: conversation.id, senderAccountId: fixture.patientAccountId, messageType: 'TEXT', body: 'before cancellation', idempotencyKey: randomUUID() });
     const cancellation = await pool!.connect();
     try {
-      await cancellation.query('BEGIN'); await cancellation.query('SELECT id FROM appointments WHERE id=$1 FOR UPDATE', [fixture.appointmentId]); await cancellation.query("UPDATE appointments SET status='CANCELLED' WHERE id=$1", [fixture.appointmentId]);
+      await cancellation.query('BEGIN'); await persistCancellation(cancellation, fixture);
       const pending = chat.send({ conversationId: conversation.id, senderAccountId: fixture.patientAccountId, messageType: 'TEXT', body: 'after cancellation', idempotencyKey: randomUUID() });
       await new Promise((resolve) => setTimeout(resolve, 25)); await cancellation.query('COMMIT');
       await expect(pending).rejects.toMatchObject({ code: 'CONFLICT' } satisfies Partial<AppointmentChatError>);
@@ -38,15 +38,16 @@ describe.skipIf(!databaseUrl)('Phase 7.1A PostgreSQL appointment chat lifecycle 
   it('serializes concurrent creation and rejects creation after cancellation', async () => {
     const fixture = await seed(pool!); const left = new PostgresAppointmentChatRepository(databaseA!); const right = new PostgresAppointmentChatRepository(databaseB!);
     const created = await Promise.all([left.getOrCreate(fixture.appointmentId), right.getOrCreate(fixture.appointmentId)]);
-    expect(new Set(created.map((conversation) => conversation.id))).toHaveSize(1);
-    await pool!.query("UPDATE appointments SET status='CANCELLED' WHERE id=$1", [fixture.appointmentId]);
+    expect(new Set(created.map((conversation) => conversation.id)).size).toBe(1);
+    const cancellation = await pool!.connect();
+    try { await cancellation.query('BEGIN'); await persistCancellation(cancellation, fixture); await cancellation.query('COMMIT'); } finally { await cancellation.query('ROLLBACK').catch(() => undefined); cancellation.release(); }
     await expect(left.getOrCreate(fixture.appointmentId)).rejects.toMatchObject({ code: 'CONFLICT' } satisfies Partial<AppointmentChatError>);
   });
 
   it('rejects conversation creation that is serialized after a concurrent cancellation', async () => {
     const fixture = await seed(pool!); const chat = new PostgresAppointmentChatRepository(databaseA!); const cancellation = await pool!.connect();
     try {
-      await cancellation.query('BEGIN'); await cancellation.query('SELECT id FROM appointments WHERE id=$1 FOR UPDATE', [fixture.appointmentId]); await cancellation.query("UPDATE appointments SET status='CANCELLED' WHERE id=$1", [fixture.appointmentId]);
+      await cancellation.query('BEGIN'); await persistCancellation(cancellation, fixture);
       const pending = chat.getOrCreate(fixture.appointmentId);
       await new Promise((resolve) => setTimeout(resolve, 25)); await cancellation.query('COMMIT');
       await expect(pending).rejects.toMatchObject({ code: 'CONFLICT' } satisfies Partial<AppointmentChatError>);
@@ -54,8 +55,10 @@ describe.skipIf(!databaseUrl)('Phase 7.1A PostgreSQL appointment chat lifecycle 
   });
 });
 
-async function seed(pool: Pool): Promise<{ appointmentId: string; patientAccountId: string }> {
-  const ids = { patient: randomUUID(), doctorAccount: randomUUID(), doctor: randomUUID(), offering: randomUUID(), exposure: randomUUID(), version: randomUUID(), price: randomUUID(), policy: randomUUID(), intent: randomUUID(), reservation: randomUUID(), allocation: randomUUID(), payment: randomUUID(), handoff: randomUUID(), appointment: randomUUID(), capacity: randomUUID(), confirmationAudit: randomUUID(), confirmationEvent: randomUUID() };
+type Fixture = { appointmentId: string; patientAccountId: string; reservationId: string; allocationId: string; capacityId: string; cancellationPolicyId: string };
+
+async function seed(pool: Pool): Promise<Fixture> {
+  const ids = { patient: randomUUID(), doctorAccount: randomUUID(), doctor: randomUUID(), offering: randomUUID(), exposure: randomUUID(), version: randomUUID(), price: randomUUID(), policy: randomUUID(), intent: randomUUID(), reservation: randomUUID(), allocation: randomUUID(), payment: randomUUID(), handoff: randomUUID(), appointment: randomUUID(), capacity: randomUUID(), confirmationAudit: randomUUID(), confirmationEvent: randomUUID(), cancellationPolicy: randomUUID() };
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -66,6 +69,9 @@ async function seed(pool: Pool): Promise<{ appointmentId: string; patientAccount
     await client.query("INSERT INTO service_exposures (id,service_offering_id,provider_doctor_profile_id,status,created_by_account_id,updated_by_account_id) VALUES ($1,$2,$3,'DRAFT',$4,$4)", [ids.exposure, ids.offering, ids.doctor, ids.doctorAccount]); await client.query("UPDATE service_exposures SET status='PUBLISHED',updated_by_account_id=$2 WHERE id=$1", [ids.exposure, ids.doctorAccount]);
     await client.query("INSERT INTO service_offering_versions (id,service_offering_id,version_number,status,effective_from,created_by_account_id) VALUES ($1,$2,1,'ACTIVE',clock_timestamp()-interval '1 day',$3)", [ids.version, ids.offering, ids.doctorAccount]);
     await client.query("INSERT INTO service_offering_prices (id,service_offering_version_id,currency,amount_minor,created_by_account_id) VALUES ($1,$2,'INR',10000,$3)", [ids.price, ids.version, ids.doctorAccount]); await client.query('INSERT INTO service_offering_version_reservation_policies (id,service_offering_version_id,hold_seconds,created_by_account_id) VALUES ($1,$2,600,$3)', [ids.policy, ids.version, ids.doctorAccount]);
+    const policyVersion = (await client.query<{ version_number: number }>('SELECT coalesce(max(version_number),0)+1 AS version_number FROM refund_policy_versions')).rows[0]!.version_number;
+    await client.query(`INSERT INTO refund_policy_versions (id,status,version_number,effective_from,policy_data)
+      VALUES ($1,'DRAFT',$2,clock_timestamp(),'{"refundOutcome":"NONE","refundBasis":"PAYMENT_AMOUNT","cancellationWindowSeconds":0,"paymentStates":["SUCCEEDED"],"allowInProgress":false}'::jsonb)`, [ids.cancellationPolicy, policyVersion]);
     await client.query("INSERT INTO appointment_intents (id,patient_account_id,booking_actor_account_id,service_exposure_id,provider_doctor_profile_id,service_offering_id,service_offering_version_id,service_offering_price_id,currency,price_amount_minor,provider_timezone,requested_local_at,starts_at,ends_at,service_duration_seconds,buffer_before_seconds,buffer_after_seconds,hold_seconds,booking_relationship,state,idempotency_key,request_fingerprint,expires_at) VALUES ($1,$2,$2,$3,$4,$5,$6,$7,'INR',10000,'UTC',clock_timestamp()::timestamp,clock_timestamp(),clock_timestamp()+interval '30 minutes',1800,0,0,600,'PATIENT_PROVIDER','SLOT_RESERVED',$8,'chat-fixture',clock_timestamp()+interval '10 minutes')", [ids.intent, ids.patient, ids.exposure, ids.doctor, ids.offering, ids.version, ids.price, `intent-${ids.intent}`]);
     await client.query("INSERT INTO slot_reservations (id,appointment_intent_id,service_offering_version_id,provider_doctor_profile_id,starts_at,ends_at,capacity_units,status,expires_at) VALUES ($1,$2,$3,$4,clock_timestamp(),clock_timestamp()+interval '30 minutes',1,'HELD',clock_timestamp()+interval '10 minutes')", [ids.reservation, ids.intent, ids.version, ids.doctor]);
     const financialInput = { appointmentIntentId: ids.intent, slotReservationId: ids.reservation, serviceExposureId: ids.exposure, serviceOfferingId: ids.offering, serviceOfferingVersionId: ids.version, serviceOfferingPriceId: ids.price, patientAccountId: ids.patient, bookingActorAccountId: ids.patient, currency: 'INR', grossAmountMinor: '10000' };
@@ -79,6 +85,20 @@ async function seed(pool: Pool): Promise<{ appointmentId: string; patientAccount
     await client.query("UPDATE appointments SET status='CONFIRMED' WHERE id=$1", [ids.appointment]);
     await client.query("INSERT INTO audit_events (id,category,event_type,target_type,target_id,outcome,metadata) VALUES ($1,'BUSINESS','FIXTURE_APPOINTMENT_TRANSITION','APPOINTMENT',$2,'SUCCESS','{}'::jsonb)", [ids.confirmationAudit, ids.appointment]);
     await client.query("INSERT INTO appointment_events (id,appointment_id,event_type,previous_status,resulting_status,context,audit_event_id) VALUES ($1,$2,'CONFIRMED','PAYMENT_PENDING','CONFIRMED','{}'::jsonb,$3)", [ids.confirmationEvent, ids.appointment, ids.confirmationAudit]);
-    await client.query('COMMIT'); return { appointmentId: ids.appointment, patientAccountId: ids.patient };
+    await client.query('COMMIT'); return { appointmentId: ids.appointment, patientAccountId: ids.patient, reservationId: ids.reservation, allocationId: ids.allocation, capacityId: ids.capacity, cancellationPolicyId: ids.cancellationPolicy };
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+/** Mirrors the existing cancellation repository's durable evidence sequence inside its transaction. */
+async function persistCancellation(client: import('pg').PoolClient, fixture: Fixture): Promise<void> {
+  const auditId = randomUUID(); const decisionId = randomUUID();
+  await client.query('SELECT id FROM appointments WHERE id=$1 FOR UPDATE', [fixture.appointmentId]);
+  await client.query("UPDATE appointment_committed_capacities SET status='RELEASED',released_at=current_timestamp WHERE id=$1 AND status='ACTIVE'", [fixture.capacityId]);
+  await client.query("UPDATE slot_reservations SET status='RELEASED',released_at=current_timestamp WHERE id=$1 AND status='HELD'", [fixture.reservationId]);
+  await client.query("UPDATE appointments SET status='CANCELLED' WHERE id=$1 AND status='CONFIRMED'", [fixture.appointmentId]);
+  await client.query("INSERT INTO audit_events (id,category,event_type,actor_account_id,target_type,target_id,outcome,metadata) VALUES ($1,'BUSINESS','APPOINTMENT_CANCELLATION_DECIDED',$2,'APPOINTMENT',$3,'SUCCESS','{}'::jsonb)", [auditId, fixture.patientAccountId, fixture.appointmentId]);
+  await client.query(`INSERT INTO appointment_cancellation_decisions (id,appointment_id,slot_reservation_id,financial_allocation_snapshot_id,payment_id,actor_account_id,previous_appointment_status,reason_category,authorization_context,cancellation_at,refund_policy_version_id,refund_outcome,refund_amount_minor,currency,capacity_released,settlement_consequence,idempotency_key,request_fingerprint,audit_event_id)
+    VALUES ($1,$2,$3,$4,NULL,$5,'CONFIRMED','TEST',jsonb_build_object('operation','appointment.cancel'),current_timestamp,$6,'NO_REFUND',0,'INR',true,'NONE',$7,$8,$9)`, [decisionId, fixture.appointmentId, fixture.reservationId, fixture.allocationId, fixture.patientAccountId, fixture.cancellationPolicyId, `cancellation-${decisionId}`, `cancellation-${decisionId}`, auditId]);
+  await client.query("INSERT INTO appointment_events (id,appointment_id,event_type,actor_account_id,previous_status,resulting_status,reason,context,audit_event_id) VALUES ($1,$2,'CANCELLED',$3,'CONFIRMED','CANCELLED','TEST',jsonb_build_object('cancellationDecisionId',$4::text),$5)", [randomUUID(), fixture.appointmentId, fixture.patientAccountId, decisionId, auditId]);
+  await client.query("INSERT INTO appointment_cancellation_financial_consequences (id,appointment_cancellation_decision_id,financial_allocation_snapshot_id,refund_id,consequence_status,amount_minor,currency,settlement_consequence) VALUES ($1,$2,$3,NULL,'NO_REFUND',0,'INR','NONE')", [randomUUID(), decisionId, fixture.allocationId]);
 }
