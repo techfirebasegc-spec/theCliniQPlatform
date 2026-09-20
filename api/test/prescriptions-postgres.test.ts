@@ -29,7 +29,7 @@ describe.skipIf(!databaseUrl)('Phase 7.1B PostgreSQL prescription schema guards'
     await expect(pool!.query(insertPrescription(), values({ ...prescription, id: randomUUID(), doctorId: randomUUID(), createKey: randomUUID() }))).rejects.toMatchObject({ code: 'P0001' });
     await expect(pool!.query(insertPrescription(), values({ ...prescription, id: randomUUID(), status: 'OTHER', createKey: randomUUID() }))).rejects.toMatchObject({ code: 'P0001' });
     await expect(pool!.query(insertPrescription(), values({ ...prescription, id: randomUUID(), status: 'ISSUED', createKey: randomUUID(), issuedAt: new Date(), issuedBy: fixture.doctorAccount, issueKey: randomUUID(), issueFingerprint: 'issue', snapshot: {}, hash: 'a'.repeat(64) }))).rejects.toMatchObject({ code: 'P0001' });
-    const secondFixture = await seed(pool!);
+    const secondFixture = await seed(pool!, fixture);
     await expect(pool!.query(insertPrescription(), values({ ...draft(secondFixture), createKey: prescription.createKey }))).rejects.toMatchObject({ code: '23505' });
   });
 
@@ -57,14 +57,15 @@ function values(value: Prescription) { return [value.id, value.appointmentId, va
 function insertItem() { return `INSERT INTO prescription_items (id,prescription_id,position,medicine_name,strength,dosage,frequency,duration,route,quantity,instructions) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`; }
 function itemValues(value: { prescriptionId: string; position: number }) { return [randomUUID(), value.prescriptionId, value.position, 'Medicine', '10 mg', '1 tablet', 'Daily', '5 days', null, null, null]; }
 
-async function seed(pool: Pool): Promise<Fixture> {
-  const ids = { patient: randomUUID(), doctorAccount: randomUUID(), doctor: randomUUID(), offering: randomUUID(), exposure: randomUUID(), version: randomUUID(), price: randomUUID(), policy: randomUUID(), intent: randomUUID(), reservation: randomUUID(), allocation: randomUUID(), payment: randomUUID(), handoff: randomUUID(), appointment: randomUUID(), capacity: randomUUID(), confirmationAudit: randomUUID(), confirmationEvent: randomUUID(), startAudit: randomUUID(), startEvent: randomUUID() };
+async function seed(pool: Pool, existingDoctor?: Pick<Fixture, 'doctorId' | 'doctorAccount'>): Promise<Fixture> {
+  const ids = { patient: randomUUID(), doctorAccount: existingDoctor?.doctorAccount ?? randomUUID(), doctor: existingDoctor?.doctorId ?? randomUUID(), offering: randomUUID(), exposure: randomUUID(), version: randomUUID(), price: randomUUID(), policy: randomUUID(), intent: randomUUID(), reservation: randomUUID(), allocation: randomUUID(), payment: randomUUID(), handoff: randomUUID(), appointment: randomUUID(), capacity: randomUUID(), confirmationAudit: randomUUID(), confirmationEvent: randomUUID(), startAudit: randomUUID(), startEvent: randomUUID() };
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query("INSERT INTO accounts (id,status) VALUES ($1,'ACTIVE'),($2,'ACTIVE')", [ids.patient, ids.doctorAccount]);
+    if (existingDoctor) await client.query("INSERT INTO accounts (id,status) VALUES ($1,'ACTIVE')", [ids.patient]);
+    else await client.query("INSERT INTO accounts (id,status) VALUES ($1,'ACTIVE'),($2,'ACTIVE')", [ids.patient, ids.doctorAccount]);
     await client.query("INSERT INTO patient_profiles (id,account_id,status) VALUES ($1,$1,'ACTIVE')", [ids.patient]);
-    await client.query("INSERT INTO doctor_profiles (id,account_id,status,professional_verification_status) VALUES ($1,$2,'ACTIVE','VERIFIED')", [ids.doctor, ids.doctorAccount]);
+    if (!existingDoctor) await client.query("INSERT INTO doctor_profiles (id,account_id,status,professional_verification_status) VALUES ($1,$2,'ACTIVE','VERIFIED')", [ids.doctor, ids.doctorAccount]);
     await client.query("INSERT INTO service_offerings (id,owner_doctor_profile_id,name,status,created_by_account_id,updated_by_account_id) VALUES ($1,$2,'Prescription fixture','ACTIVE',$3,$3)", [ids.offering, ids.doctor, ids.doctorAccount]);
     await client.query("INSERT INTO service_exposures (id,service_offering_id,provider_doctor_profile_id,status,created_by_account_id,updated_by_account_id) VALUES ($1,$2,$3,'DRAFT',$4,$4)", [ids.exposure, ids.offering, ids.doctor, ids.doctorAccount]);
     await client.query("UPDATE service_exposures SET status='PUBLISHED',updated_by_account_id=$2 WHERE id=$1", [ids.exposure, ids.doctorAccount]);
