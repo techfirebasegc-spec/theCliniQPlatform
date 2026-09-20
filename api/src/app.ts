@@ -52,6 +52,9 @@ import { registerAppointmentRescheduleRoutes } from './routes/appointment-resche
 import { registerAppointmentOperationRoutes } from './routes/appointment-operations.js';
 import { AppointmentLifecycleService } from './modules/appointments/appointment-lifecycle.js';
 import { PostgresAppointmentLifecycleRepository } from './modules/appointments/postgres-appointment-lifecycle-repository.js';
+import { AppointmentChatService } from './modules/chat/appointment-chat.js';
+import { PostgresAppointmentChatRepository } from './modules/chat/postgres-appointment-chat-repository.js';
+import { registerAppointmentChatRoutes } from './routes/appointment-chat.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -117,6 +120,10 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   void app.register(async (instance) => registerAppointmentOperationRoutes(instance, {
     lifecycle: new AppointmentLifecycleService(new PostgresAppointmentLifecycleRepository(services.database)),
     authorization: appointmentAuthorization,
+    sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+  }));
+  void app.register(async (instance) => registerAppointmentChatRoutes(instance, {
+    chat: new AppointmentChatService(new PostgresAppointmentChatRepository(services.database)),
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
 
