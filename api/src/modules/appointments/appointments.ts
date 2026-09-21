@@ -11,7 +11,7 @@ export type AvailabilityException = { kind: 'HOLIDAY' | 'LEAVE' | 'BLOCKED' | 'O
 export type BookableService = {
   provider: ProviderInput; serviceOfferingId: string; versionId: string; priceId: string; currency: string; priceAmountMinor: bigint;
   bookingTenantId: string | null;
-  timezone: string; durationSeconds: number; bufferBeforeSeconds: number; bufferAfterSeconds: number; capacity: number;
+  timezone: string; slotDurationSeconds: number; durationSeconds: number; bufferBeforeSeconds: number; bufferAfterSeconds: number; capacity: number;
   bookingLeadSeconds: number; bookingHorizonSeconds: number; holdSeconds: number; rules: AvailabilityRule[]; exceptions: AvailabilityException[];
 };
 export type AppointmentIntent = {

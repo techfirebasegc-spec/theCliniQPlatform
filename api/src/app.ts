@@ -58,6 +58,9 @@ import { registerAppointmentChatRoutes } from './routes/appointment-chat.js';
 import { AppointmentPrescriptionService } from './modules/prescriptions/appointment-prescriptions.js';
 import { PostgresAppointmentPrescriptionRepository } from './modules/prescriptions/postgres-appointment-prescription-repository.js';
 import { registerAppointmentPrescriptionRoutes } from './routes/appointment-prescriptions.js';
+import { registerPublicDiscoveryRoutes } from './routes/public-discovery.js';
+import { PublicDiscoveryService } from './modules/discovery/public-discovery.js';
+import { PostgresPublicDiscoveryRepository } from './modules/discovery/postgres-public-discovery-repository.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -79,6 +82,7 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   void app.register(cors, { origin: environment.WEB_URL, credentials: true });
   registerErrorHandler(app);
   void app.register(async (instance) => registerStatusRoutes(instance, services));
+  void app.register(async (instance) => registerPublicDiscoveryRoutes(instance, { discovery: new PublicDiscoveryService(new PostgresPublicDiscoveryRepository(services.database)) }));
   void app.register(async (instance) => registerProfileRoutes(instance, {
     profiles: new ProfileService(new PostgresProfileRepository(services.database), new PostgresAuditRepository(services.database)),
     sessions: new PostgresSessionRepository(services.database),
