@@ -15,6 +15,7 @@
     "migrate:down": "node scripts/run-migration.mjs down"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1136.0",
     "@cliniq/config": "workspace:*",
     "@cliniq/contracts": "workspace:*",
     "@fastify/cors": "^11.1.0",

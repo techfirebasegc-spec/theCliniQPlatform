@@ -12,6 +12,11 @@ const environmentSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().trim().min(1).optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().trim().min(1).optional(),
   PAYMENT_ORDER_PROVISIONING_LEASE_SECONDS: z.coerce.number().int().positive().optional(),
+  AIC_S3_ENDPOINT: z.url().optional(),
+  AIC_S3_REGION: z.string().trim().min(1).optional(),
+  AIC_S3_BUCKET: z.string().trim().min(1).optional(),
+  AIC_S3_ACCESS_KEY_ID: z.string().trim().min(1).optional(),
+  AIC_S3_SECRET_ACCESS_KEY: z.string().trim().min(1).optional(),
   SESSION_IDLE_TTL_SECONDS: z.coerce.number().int().positive(),
   SESSION_ABSOLUTE_TTL_SECONDS: z.coerce.number().int().positive(),
 }).refine((environment) => environment.SESSION_ABSOLUTE_TTL_SECONDS >= environment.SESSION_IDLE_TTL_SECONDS, {
@@ -27,6 +32,13 @@ const environmentSchema = z.object({
   }
   if (configured === credentials.length && environment.PAYMENT_ORDER_PROVISIONING_LEASE_SECONDS === undefined) {
     context.addIssue({ code: 'custom', path: ['PAYMENT_ORDER_PROVISIONING_LEASE_SECONDS'], message: 'PAYMENT_ORDER_PROVISIONING_LEASE_SECONDS is required when Razorpay is configured.' });
+  }
+  const aicCredentials = [environment.AIC_S3_ENDPOINT, environment.AIC_S3_REGION, environment.AIC_S3_BUCKET, environment.AIC_S3_ACCESS_KEY_ID, environment.AIC_S3_SECRET_ACCESS_KEY];
+  const aicConfigured = aicCredentials.filter((value) => value !== undefined).length;
+  if (aicConfigured !== 0 && aicConfigured !== aicCredentials.length) {
+    for (const [index, value] of aicCredentials.entries()) {
+      if (value === undefined) context.addIssue({ code: 'custom', path: [['AIC_S3_ENDPOINT', 'AIC_S3_REGION', 'AIC_S3_BUCKET', 'AIC_S3_ACCESS_KEY_ID', 'AIC_S3_SECRET_ACCESS_KEY'][index]], message: 'AIC S3 configuration must be configured together.' });
+    }
   }
 });
 
