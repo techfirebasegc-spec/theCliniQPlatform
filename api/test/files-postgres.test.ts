@@ -18,9 +18,9 @@ describe.skipIf(!databaseUrl)('Phase 7.1C PostgreSQL file metadata schema guards
 
   it('creates file metadata with one FK-backed immutable binding and useful indexes', async () => withFixture(async (client, fixture) => {
     const file = await createFile(client, fixture);
-    const binding = await binding(client, file.id, fixture.patientProfile);
+    const fileBinding = await binding(client, file.id, fixture.patientProfile);
     await client.query('SET CONSTRAINTS files_require_one_binding IMMEDIATE');
-    expect(binding.purpose).toBe('PATIENT_PROFILE_MEDIA');
+    expect(fileBinding.purpose).toBe('PATIENT_PROFILE_MEDIA');
     const indexes = await client.query<{ names: string[] }>("SELECT array_agg(indexrelid::regclass::text ORDER BY indexrelid::regclass::text) AS names FROM pg_index WHERE indrelid IN ('files'::regclass,'file_bindings'::regclass)");
     expect(indexes.rows[0]?.names).toContain('files_status_created_at');
     expect(indexes.rows[0]?.names).toContain('file_bindings_patient_profile');
@@ -28,17 +28,17 @@ describe.skipIf(!databaseUrl)('Phase 7.1C PostgreSQL file metadata schema guards
 
   it('enforces unique object keys and actor-scoped create idempotency', async () => withFixture(async (client, fixture) => {
     const first = await createFile(client, fixture, { objectKey: `objects/${randomUUID()}`, idempotencyKey: 'same-key' }); await binding(client, first.id, fixture.patientProfile);
-    await expect(createFile(client, fixture, { objectKey: first.objectKey, idempotencyKey: 'different-key' })).rejects.toMatchObject({ code: '23505' });
-    await expect(createFile(client, fixture, { objectKey: `objects/${randomUUID()}`, idempotencyKey: 'same-key' })).rejects.toMatchObject({ code: '23505' });
+    await expectPostgresError(client, () => createFile(client, fixture, { objectKey: first.objectKey, idempotencyKey: 'different-key' }), '23505');
+    await expectPostgresError(client, () => createFile(client, fixture, { objectKey: `objects/${randomUUID()}`, idempotencyKey: 'same-key' }), '23505');
     const second = await createFile(client, { ...fixture, creator: fixture.otherAccount }, { objectKey: `objects/${randomUUID()}`, idempotencyKey: 'same-key' }); await binding(client, second.id, fixture.patientProfile);
   }));
 
   it('enforces positive size, safe metadata, available hashes, and pending creation', async () => withFixture(async (client, fixture) => {
-    await expect(createFile(client, fixture, { byteSize: 0 })).rejects.toMatchObject({ code: '23514' });
-    await expect(createFile(client, fixture, { originalFilename: 'unsafe\nname.txt' })).rejects.toMatchObject({ code: '23514' });
-    await expect(createFile(client, fixture, { status: 'AVAILABLE', sha256: 'a'.repeat(64) })).rejects.toMatchObject({ code: 'P0001' });
+    await expectPostgresError(client, () => createFile(client, fixture, { byteSize: 0 }), '23514');
+    await expectPostgresError(client, () => createFile(client, fixture, { originalFilename: 'unsafe\nname.txt' }), '23514');
+    await expectPostgresError(client, () => createFile(client, fixture, { status: 'AVAILABLE', sha256: 'a'.repeat(64) }), 'P0001');
     const file = await createFile(client, fixture); await binding(client, file.id, fixture.patientProfile);
-    await expect(client.query("UPDATE files SET status='AVAILABLE',sha256='not-a-hash' WHERE id=$1", [file.id])).rejects.toMatchObject({ code: '23514' });
+    await expectPostgresError(client, () => client.query("UPDATE files SET status='AVAILABLE',sha256='not-a-hash' WHERE id=$1", [file.id]), '23514');
   }));
 
   it('allows only valid lifecycle transitions and preserves immutable storage identity', async () => withFixture(async (client, fixture) => {
@@ -46,22 +46,22 @@ describe.skipIf(!databaseUrl)('Phase 7.1C PostgreSQL file metadata schema guards
     await client.query("UPDATE files SET status='UPLOAD_FAILED' WHERE id=$1", [file.id]);
     await client.query("UPDATE files SET status='PENDING_UPLOAD' WHERE id=$1", [file.id]);
     await client.query("UPDATE files SET status='AVAILABLE',sha256=$2 WHERE id=$1", [file.id, 'a'.repeat(64)]);
-    await expect(client.query("UPDATE files SET status='UPLOAD_FAILED' WHERE id=$1", [file.id])).rejects.toMatchObject({ code: 'P0001' });
-    await expect(client.query("UPDATE files SET object_key='changed' WHERE id=$1", [file.id])).rejects.toMatchObject({ code: 'P0001' });
+    await expectPostgresError(client, () => client.query("UPDATE files SET status='UPLOAD_FAILED' WHERE id=$1", [file.id]), 'P0001');
+    await expectPostgresError(client, () => client.query("UPDATE files SET object_key='changed' WHERE id=$1", [file.id]), 'P0001');
     await client.query("UPDATE files SET status='DELETE_PENDING' WHERE id=$1", [file.id]);
     await client.query("UPDATE files SET status='DELETED',deleted_by_account_id=$2 WHERE id=$1", [file.id, fixture.creator]);
-    await expect(client.query('DELETE FROM files WHERE id=$1', [file.id])).rejects.toMatchObject({ code: 'P0001' });
+    await expectPostgresError(client, () => client.query('DELETE FROM files WHERE id=$1', [file.id]), 'P0001');
   }));
 
   it('enforces one immutable approved binding with FK integrity', async () => withFixture(async (client, fixture) => {
     const file = await createFile(client, fixture);
     await binding(client, file.id, fixture.patientProfile);
-    await expect(binding(client, file.id, fixture.patientProfile)).rejects.toMatchObject({ code: '23505' });
+    await expectPostgresError(client, () => binding(client, file.id, fixture.patientProfile), '23505');
     const invalidTarget = await createFile(client, fixture);
-    await expect(binding(client, invalidTarget.id, randomUUID())).rejects.toMatchObject({ code: '23503' });
+    await expectPostgresError(client, () => binding(client, invalidTarget.id, randomUUID()), '23503');
     const unsupported = await createFile(client, fixture);
-    await expect(client.query("INSERT INTO file_bindings (id,file_id,purpose) VALUES ($1,$2,'CAREER_RESUME')", [randomUUID(), unsupported.id])).rejects.toMatchObject({ code: '23514' });
-    await expect(client.query('UPDATE file_bindings SET purpose=$2 WHERE file_id=$1', [file.id, 'DOCTOR_PROFILE_MEDIA'])).rejects.toMatchObject({ code: 'P0001' });
+    await expectPostgresError(client, () => client.query("INSERT INTO file_bindings (id,file_id,purpose) VALUES ($1,$2,'CAREER_RESUME')", [randomUUID(), unsupported.id]), '23514');
+    await expectPostgresError(client, () => client.query('UPDATE file_bindings SET purpose=$2 WHERE file_id=$1', [file.id, 'DOCTOR_PROFILE_MEDIA']), 'P0001');
   }));
 });
 
@@ -91,4 +91,22 @@ async function createFile(client: PoolClient, fixture: Pick<Fixture, 'creator'>,
 async function binding(client: PoolClient, fileId: string, patientProfileId: string): Promise<{ purpose: string }> {
   const result = await client.query<{ purpose: string }>("INSERT INTO file_bindings (id,file_id,purpose,patient_profile_id) VALUES ($1,$2,'PATIENT_PROFILE_MEDIA',$3) RETURNING purpose", [randomUUID(), fileId, patientProfileId]);
   return result.rows[0]!;
+}
+
+async function expectPostgresError(
+  client: PoolClient,
+  operation: () => Promise<unknown>,
+  code: string,
+): Promise<void> {
+  await client.query('SAVEPOINT expected_postgres_error');
+  let error: unknown;
+  try {
+    await operation();
+  } catch (caught) {
+    error = caught;
+  } finally {
+    await client.query('ROLLBACK TO SAVEPOINT expected_postgres_error');
+    await client.query('RELEASE SAVEPOINT expected_postgres_error');
+  }
+  expect(error).toMatchObject({ code });
 }
