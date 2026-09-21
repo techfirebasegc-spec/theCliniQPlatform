@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
+    "prebuild": "pnpm --filter @cliniq/config build",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src test --max-warnings=0",
+    "pretypecheck": "pnpm --filter @cliniq/config build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
