@@ -83,7 +83,10 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   const services = dependencies ?? { database: createDatabase(environment), redis: createRedis(environment) };
 
   void app.register(helmet);
-  void app.register(cors, { origin: environment.WEB_URL, credentials: true });
+  const corsOrigins = environment.WEB_URL === 'https://thecliniq.co.in'
+    ? [environment.WEB_URL, 'https://www.thecliniq.co.in']
+    : [environment.WEB_URL];
+  void app.register(cors, { origin: corsOrigins, credentials: true });
   registerErrorHandler(app);
   void app.register(async (instance) => registerStatusRoutes(instance, services));
   void app.register(async (instance) => registerPublicDiscoveryRoutes(instance, { discovery: new PublicDiscoveryService(new PostgresPublicDiscoveryRepository(services.database)) }));
