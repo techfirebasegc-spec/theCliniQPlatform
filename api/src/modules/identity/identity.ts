@@ -14,18 +14,27 @@ export interface FirebaseIdentityVerifier {
   verify(idToken: string): Promise<VerifiedFirebaseIdentity>;
 }
 
+export class FirebaseIdentityVerificationError extends Error {
+  public constructor() {
+    super('FIREBASE_ID_TOKEN_INVALID');
+  }
+}
+
 export class FirebaseAdminIdentityVerifier implements FirebaseIdentityVerifier {
   public constructor(private readonly projectId: string) {}
 
   public async verify(idToken: string): Promise<VerifiedFirebaseIdentity> {
-    const app = getApps()[0] ?? initializeApp({ credential: applicationDefault(), projectId: this.projectId });
-    const token = await getAuth(app).verifyIdToken(idToken, true);
-    const signInProvider = token.firebase.sign_in_provider;
-    const provider = signInProvider === 'google.com' ? 'firebase_google' : signInProvider === 'phone' ? 'firebase_phone' : null;
-    if (provider === null) {
-      throw new Error('UNSUPPORTED_FIREBASE_PROVIDER');
+    try {
+      const app = getApps()[0] ?? initializeApp({ credential: applicationDefault(), projectId: this.projectId });
+      const token = await getAuth(app).verifyIdToken(idToken, true);
+      const signInProvider = token.firebase.sign_in_provider;
+      const provider = signInProvider === 'google.com' ? 'firebase_google' : signInProvider === 'phone' ? 'firebase_phone' : null;
+      if (provider === null) throw new FirebaseIdentityVerificationError();
+      return { provider, subject: token.uid, verifiedAt: new Date() };
+    } catch (error) {
+      if (error instanceof FirebaseIdentityVerificationError) throw error;
+      throw new FirebaseIdentityVerificationError();
     }
-    return { provider, subject: token.uid, verifiedAt: new Date() };
   }
 }
 

@@ -10,6 +10,10 @@ import { PostgresAuditRepository } from './modules/audit/postgres-audit-reposito
 import { PostgresProfileRepository } from './modules/profiles/postgres-profile-repository.js';
 import { ProfileService } from './modules/profiles/profiles.js';
 import { PostgresSessionRepository } from './modules/sessions/postgres-session-repository.js';
+import { FirebaseSessionBridge } from './modules/sessions/firebase-session-bridge.js';
+import { AccountIdentityService, FirebaseAdminIdentityVerifier } from './modules/identity/identity.js';
+import { PostgresAccountIdentityRepository } from './modules/identity/postgres-account-identity-repository.js';
+import { registerAuthSessionRoutes } from './routes/auth-sessions.js';
 import { PostgresTenantRepository } from './modules/tenants/postgres-tenant-repository.js';
 import { TenantClinicService } from './modules/tenants/tenants.js';
 import { PostgresMembershipRepository } from './modules/memberships/postgres-membership-repository.js';
@@ -83,6 +87,14 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   registerErrorHandler(app);
   void app.register(async (instance) => registerStatusRoutes(instance, services));
   void app.register(async (instance) => registerPublicDiscoveryRoutes(instance, { discovery: new PublicDiscoveryService(new PostgresPublicDiscoveryRepository(services.database)) }));
+  void app.register(async (instance) => registerAuthSessionRoutes(instance, {
+    sessions: new FirebaseSessionBridge(
+      new AccountIdentityService(new PostgresAccountIdentityRepository(services.database)),
+      new FirebaseAdminIdentityVerifier(environment.FIREBASE_PROJECT_ID),
+      new PostgresSessionRepository(services.database),
+      { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+    ),
+  }));
   void app.register(async (instance) => registerProfileRoutes(instance, {
     profiles: new ProfileService(new PostgresProfileRepository(services.database), new PostgresAuditRepository(services.database)),
     sessions: new PostgresSessionRepository(services.database),
