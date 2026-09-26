@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate:up": "node scripts/run-migration.mjs up",
-    "migrate:down": "node scripts/run-migration.mjs down"
+    "migrate:down": "node scripts/run-migration.mjs down",
+    "provision-admin": "tsx scripts/provision-admin.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",

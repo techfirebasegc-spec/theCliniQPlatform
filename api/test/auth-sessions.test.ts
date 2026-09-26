@@ -1,14 +1,14 @@
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { registerErrorHandler } from '../src/middleware/errors.js';
-import { FirebaseIdentityVerificationError, type AccountIdentityRecord, type FirebaseIdentityVerifier } from '../src/modules/identity/identity.js';
+import { AccountIdentityService, FirebaseIdentityVerificationError, FirebaseProviderPolicyVerifier, sharedFirebaseIdentityProviders, type AccountIdentityRecord, type FirebaseIdentityVerifier } from '../src/modules/identity/identity.js';
 import { FirebaseSessionBridge, type SessionBridgeRepository } from '../src/modules/sessions/firebase-session-bridge.js';
 import { createSession, sessionCookieName, type NewSession, type StoredSession } from '../src/modules/sessions/session.js';
 import { registerAuthSessionRoutes } from '../src/routes/auth-sessions.js';
 
 const policy = { idleTtlSeconds: 60, absoluteTtlSeconds: 120 };
 
-function appWith(options: { resolve?: (token: string) => Promise<AccountIdentityRecord>; verify?: FirebaseIdentityVerifier['verify']; stored?: StoredSession | null } = {}) {
+function appWith(options: { identities?: Pick<AccountIdentityService, 'resolve'>; resolve?: (token: string) => Promise<AccountIdentityRecord>; verify?: FirebaseIdentityVerifier['verify']; stored?: StoredSession | null } = {}) {
   const created: { accountId: string; secretHash: string }[] = [];
   const revoked: { sessionId: string; accountId: string; reason: string }[] = [];
   const sessions: SessionBridgeRepository = {
@@ -18,7 +18,7 @@ function appWith(options: { resolve?: (token: string) => Promise<AccountIdentity
     touch: async () => ({ updated: true }),
   };
   const verifier: FirebaseIdentityVerifier = { verify: options.verify ?? (async () => ({ provider: 'firebase_google', subject: 'firebase-user', verifiedAt: new Date() })) };
-  const identities = { resolve: options.resolve ?? (async (token: string) => { await verifier.verify(token); return { accountId: 'account-1', identityId: 'identity-1', accountStatus: 'ACTIVE' }; }) };
+  const identities = options.identities ?? { resolve: options.resolve ?? (async (token: string) => { await verifier.verify(token); return { accountId: 'account-1', identityId: 'identity-1', accountStatus: 'ACTIVE' }; }) };
   const bridge = new FirebaseSessionBridge(
     identities,
     verifier,
@@ -52,6 +52,32 @@ describe('Firebase platform session bridge routes', () => {
     expect(response.statusCode).toBe(204);
     expect(response.headers['set-cookie']).toContain('SameSite=none');
     expect(response.headers['set-cookie']).toContain('Secure');
+    await app.close();
+  });
+
+  it.each(['firebase_google', 'firebase_phone'] as const)('keeps the shared session route compatible with %s identities', async (provider) => {
+    const verifier = new FirebaseProviderPolicyVerifier({ verify: async () => ({ provider, subject: 'firebase-user', verifiedAt: new Date() }) }, sharedFirebaseIdentityProviders);
+    const { app, created } = appWith({ verify: verifier.verify.bind(verifier) });
+    const response = await app.inject({ method: 'POST', url: '/v1/auth/firebase/session', payload: { idToken: 'firebase-token' } });
+    expect(response.statusCode).toBe(204);
+    expect(created).toHaveLength(1);
+    await app.close();
+  });
+
+  it('rejects a password token before account resolution, identity creation, or session creation', async () => {
+    const accountRepositoryCalls = { find: 0, create: 0, authenticated: 0 };
+    const identities = new AccountIdentityService({
+      findByProviderSubject: async () => { accountRepositoryCalls.find += 1; return null; },
+      createAccountWithIdentity: async () => { accountRepositoryCalls.create += 1; return { accountId: 'new-account', identityId: 'new-identity', accountStatus: 'PENDING_VERIFICATION' }; },
+      markAuthenticated: async () => { accountRepositoryCalls.authenticated += 1; },
+    });
+    const passwordVerifier = new FirebaseProviderPolicyVerifier({ verify: async () => ({ provider: 'firebase_password', subject: 'password-user', verifiedAt: new Date() }) }, sharedFirebaseIdentityProviders);
+    const { app, created } = appWith({ identities, verify: passwordVerifier.verify.bind(passwordVerifier) });
+    const response = await app.inject({ method: 'POST', url: '/v1/auth/firebase/session', payload: { idToken: 'password-token' } });
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['set-cookie']).toBeUndefined();
+    expect(accountRepositoryCalls).toEqual({ find: 0, create: 0, authenticated: 0 });
+    expect(created).toEqual([]);
     await app.close();
   });
 

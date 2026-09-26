@@ -2,7 +2,7 @@ import { createIdentifier } from '../../shared/identifiers/uuid.js';
 import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
-export type FirebaseIdentityProvider = 'firebase_google' | 'firebase_phone';
+export type FirebaseIdentityProvider = 'firebase_google' | 'firebase_phone' | 'firebase_password';
 
 export interface VerifiedFirebaseIdentity {
   provider: FirebaseIdentityProvider;
@@ -14,10 +14,20 @@ export interface FirebaseIdentityVerifier {
   verify(idToken: string): Promise<VerifiedFirebaseIdentity>;
 }
 
+export const sharedFirebaseIdentityProviders: readonly FirebaseIdentityProvider[] = ['firebase_google', 'firebase_phone'];
+export const adminFirebaseIdentityProviders: readonly FirebaseIdentityProvider[] = ['firebase_password'];
+
 export class FirebaseIdentityVerificationError extends Error {
   public constructor() {
     super('FIREBASE_ID_TOKEN_INVALID');
   }
+}
+
+export function firebaseIdentityProviderFromSignInProvider(signInProvider: unknown): FirebaseIdentityProvider | null {
+  if (signInProvider === 'google.com') return 'firebase_google';
+  if (signInProvider === 'phone') return 'firebase_phone';
+  if (signInProvider === 'password') return 'firebase_password';
+  return null;
 }
 
 export class FirebaseAdminIdentityVerifier implements FirebaseIdentityVerifier {
@@ -27,14 +37,23 @@ export class FirebaseAdminIdentityVerifier implements FirebaseIdentityVerifier {
     try {
       const app = getApps()[0] ?? initializeApp({ credential: applicationDefault(), projectId: this.projectId });
       const token = await getAuth(app).verifyIdToken(idToken, true);
-      const signInProvider = token.firebase.sign_in_provider;
-      const provider = signInProvider === 'google.com' ? 'firebase_google' : signInProvider === 'phone' ? 'firebase_phone' : null;
+      const provider = firebaseIdentityProviderFromSignInProvider(token.firebase.sign_in_provider);
       if (provider === null) throw new FirebaseIdentityVerificationError();
       return { provider, subject: token.uid, verifiedAt: new Date() };
     } catch (error) {
       if (error instanceof FirebaseIdentityVerificationError) throw error;
       throw new FirebaseIdentityVerificationError();
     }
+  }
+}
+
+export class FirebaseProviderPolicyVerifier implements FirebaseIdentityVerifier {
+  public constructor(private readonly verifier: FirebaseIdentityVerifier, private readonly allowedProviders: readonly FirebaseIdentityProvider[]) {}
+
+  public async verify(idToken: string): Promise<VerifiedFirebaseIdentity> {
+    const identity = await this.verifier.verify(idToken);
+    if (!this.allowedProviders.includes(identity.provider)) throw new FirebaseIdentityVerificationError();
+    return identity;
   }
 }
 

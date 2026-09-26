@@ -3,7 +3,7 @@ export type ServiceStatus = 'ok' | 'unavailable';
 export const accountStatuses = ['PENDING_VERIFICATION', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED', 'DELETED_REQUESTED', 'DELETED'] as const;
 export type AccountStatus = (typeof accountStatuses)[number];
 
-export const authenticationIdentityProviders = ['firebase_google', 'firebase_phone'] as const;
+export const authenticationIdentityProviders = ['firebase_google', 'firebase_phone', 'firebase_password'] as const;
 export type AuthenticationIdentityProvider = (typeof authenticationIdentityProviders)[number];
 
 export const authenticationIdentityStatuses = ['LINKED', 'UNLINKED', 'COMPROMISED', 'DISABLED'] as const;

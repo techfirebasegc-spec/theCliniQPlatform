@@ -11,9 +11,12 @@ import { PostgresProfileRepository } from './modules/profiles/postgres-profile-r
 import { ProfileService } from './modules/profiles/profiles.js';
 import { PostgresSessionRepository } from './modules/sessions/postgres-session-repository.js';
 import { FirebaseSessionBridge } from './modules/sessions/firebase-session-bridge.js';
-import { AccountIdentityService, FirebaseAdminIdentityVerifier } from './modules/identity/identity.js';
+import { AdminFirebaseSessionBridge } from './modules/sessions/admin-firebase-session-bridge.js';
+import { AccountIdentityService, adminFirebaseIdentityProviders, FirebaseAdminIdentityVerifier, FirebaseProviderPolicyVerifier, sharedFirebaseIdentityProviders } from './modules/identity/identity.js';
 import { PostgresAccountIdentityRepository } from './modules/identity/postgres-account-identity-repository.js';
 import { registerAuthSessionRoutes } from './routes/auth-sessions.js';
+import { registerAdminAuthSessionRoutes } from './routes/admin-auth-sessions.js';
+import { PlatformAdminEntitlementService, PostgresPlatformAdminEntitlementRepository } from './modules/admin-access/admin-entitlements.js';
 import { PostgresTenantRepository } from './modules/tenants/postgres-tenant-repository.js';
 import { TenantClinicService } from './modules/tenants/tenants.js';
 import { PostgresMembershipRepository } from './modules/memberships/postgres-membership-repository.js';
@@ -91,7 +94,16 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   void app.register(async (instance) => registerAuthSessionRoutes(instance, {
     sessions: new FirebaseSessionBridge(
       new AccountIdentityService(new PostgresAccountIdentityRepository(services.database)),
-      new FirebaseAdminIdentityVerifier(environment.FIREBASE_PROJECT_ID),
+      new FirebaseProviderPolicyVerifier(new FirebaseAdminIdentityVerifier(environment.FIREBASE_PROJECT_ID), sharedFirebaseIdentityProviders),
+      new PostgresSessionRepository(services.database),
+      { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
+    ),
+  }));
+  void app.register(async (instance) => registerAdminAuthSessionRoutes(instance, {
+    sessions: new AdminFirebaseSessionBridge(
+      new PostgresAccountIdentityRepository(services.database),
+      new FirebaseProviderPolicyVerifier(new FirebaseAdminIdentityVerifier(environment.FIREBASE_PROJECT_ID), adminFirebaseIdentityProviders),
+      new PlatformAdminEntitlementService(new PostgresPlatformAdminEntitlementRepository(services.database)),
       new PostgresSessionRepository(services.database),
       { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
     ),
