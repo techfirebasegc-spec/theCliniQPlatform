@@ -69,10 +69,17 @@ describe('AdminProvisioner', () => {
 });
 
 describe('Admin provisioning guardrails', () => {
-  it('rejects production and targets other than local or staging', () => {
+  it('requires the exact production target to allow production provisioning', () => {
+    expect(() => requireAdminProvisioningTarget({ nodeEnvironment: 'production', target: undefined })).toThrow('ADMIN_PROVISIONING_PRODUCTION_FORBIDDEN');
     expect(() => requireAdminProvisioningTarget({ nodeEnvironment: 'production', target: 'staging' })).toThrow('ADMIN_PROVISIONING_PRODUCTION_FORBIDDEN');
+    expect(requireAdminProvisioningTarget({ nodeEnvironment: 'production', target: 'production' })).toBe('production');
+  });
+
+  it('keeps existing non-production target restrictions', () => {
     expect(() => requireAdminProvisioningTarget({ nodeEnvironment: 'development', target: undefined })).toThrow('ADMIN_PROVISIONING_TARGET_REQUIRED');
     expect(() => requireAdminProvisioningTarget({ nodeEnvironment: 'development', target: 'production' })).toThrow('ADMIN_PROVISIONING_TARGET_REQUIRED');
+    expect(requireAdminProvisioningTarget({ nodeEnvironment: 'development', target: 'local' })).toBe('local');
+    expect(requireAdminProvisioningTarget({ nodeEnvironment: 'test', target: 'staging' })).toBe('staging');
   });
 
   it('requires exactly one nonblank Firebase UID value', () => {

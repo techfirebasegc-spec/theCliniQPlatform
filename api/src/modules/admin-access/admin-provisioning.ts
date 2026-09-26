@@ -2,7 +2,7 @@ import { createIdentifier } from '../../shared/identifiers/uuid.js';
 import type { DatabaseHealth } from '../../infrastructure/database.js';
 import type { PostgresExecutor } from '../sessions/postgres-session-repository.js';
 
-export type AdminProvisioningTarget = 'local' | 'staging';
+export type AdminProvisioningTarget = 'local' | 'staging' | 'production';
 
 export class AdminProvisioningError extends Error {
   public constructor(public readonly code: 'ADMIN_PROVISIONING_PRODUCTION_FORBIDDEN' | 'ADMIN_PROVISIONING_TARGET_REQUIRED' | 'ADMIN_PROVISIONING_INVALID_FIREBASE_UID' | 'ADMIN_PROVISIONING_SCHEMA_UNAVAILABLE' | 'FIREBASE_IDENTITY_ALREADY_PROVISIONED') {
@@ -25,7 +25,10 @@ export type ProvisionedAdmin = {
 type SchemaCheck = { entitlement_table_exists: boolean; firebase_password_supported: boolean };
 
 export function requireAdminProvisioningTarget(environment: AdminProvisioningEnvironment): AdminProvisioningTarget {
-  if (environment.nodeEnvironment === 'production') throw new AdminProvisioningError('ADMIN_PROVISIONING_PRODUCTION_FORBIDDEN');
+  if (environment.nodeEnvironment === 'production') {
+    if (environment.target === 'production') return environment.target;
+    throw new AdminProvisioningError('ADMIN_PROVISIONING_PRODUCTION_FORBIDDEN');
+  }
   if (environment.target === 'local' || environment.target === 'staging') return environment.target;
   throw new AdminProvisioningError('ADMIN_PROVISIONING_TARGET_REQUIRED');
 }
