@@ -46,6 +46,15 @@ describe('Firebase platform session bridge routes', () => {
     await app.close();
   });
 
+  it('uses a cross-site secure cookie only for the explicit local Admin development origin', async () => {
+    const { app } = appWith();
+    const response = await app.inject({ method: 'POST', url: '/v1/auth/firebase/session', headers: { origin: 'http://localhost:3001' }, payload: { idToken: 'firebase-token' } });
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['set-cookie']).toContain('SameSite=none');
+    expect(response.headers['set-cookie']).toContain('Secure');
+    await app.close();
+  });
+
   it('rejects a missing or invalid Firebase token without creating a platform session', async () => {
     const { app, created } = appWith({ verify: async () => { throw new FirebaseIdentityVerificationError(); } });
     const missing = await app.inject({ method: 'POST', url: '/v1/auth/firebase/session', payload: {} });

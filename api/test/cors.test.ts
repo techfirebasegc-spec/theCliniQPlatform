@@ -54,6 +54,12 @@ describe('production CORS origins', () => {
     expect(response.headers['access-control-allow-credentials']).toBe('true');
   });
 
+  it('allows the explicit local Admin development origin', async () => {
+    const response = await corsResponse('http://localhost:3001');
+    expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3001');
+    expect(response.headers['access-control-allow-credentials']).toBe('true');
+  });
+
   it('does not allow an unrelated origin', async () => {
     const response = await corsResponse('https://unrelated.example');
     expect(response.headers['access-control-allow-origin']).toBeUndefined();

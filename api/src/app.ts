@@ -65,6 +65,7 @@ import { registerAppointmentPrescriptionRoutes } from './routes/appointment-pres
 import { registerPublicDiscoveryRoutes } from './routes/public-discovery.js';
 import { PublicDiscoveryService } from './modules/discovery/public-discovery.js';
 import { PostgresPublicDiscoveryRepository } from './modules/discovery/postgres-public-discovery-repository.js';
+import { browserOrigins } from './config/browser-origins.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import Fastify from 'fastify';
@@ -83,10 +84,7 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   const services = dependencies ?? { database: createDatabase(environment), redis: createRedis(environment) };
 
   void app.register(helmet);
-  const corsOrigins = environment.WEB_URL === 'https://thecliniq.co.in'
-    ? [environment.WEB_URL, 'https://www.thecliniq.co.in']
-    : [environment.WEB_URL];
-  void app.register(cors, { origin: corsOrigins, credentials: true });
+  void app.register(cors, { origin: browserOrigins(environment.WEB_URL), credentials: true });
   registerErrorHandler(app);
   void app.register(async (instance) => registerStatusRoutes(instance, services));
   void app.register(async (instance) => registerPublicDiscoveryRoutes(instance, { discovery: new PublicDiscoveryService(new PostgresPublicDiscoveryRepository(services.database)) }));
