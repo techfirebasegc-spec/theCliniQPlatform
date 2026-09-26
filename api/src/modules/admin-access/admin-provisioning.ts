@@ -60,7 +60,7 @@ export class AdminProvisioner {
 
       await database.query('INSERT INTO accounts (id, status, display_name, created_by_account_id, updated_by_account_id) VALUES ($1, $2, $3, NULL, NULL)', [accountId, 'ACTIVE', 'Admin']);
       await database.query('INSERT INTO authentication_identities (id, account_id, provider, provider_subject, status, verified_at, linked_at, last_authenticated_at, created_by_account_id, updated_by_account_id) VALUES ($1, $2, $3, $4, $5, $6, $6, NULL, NULL, NULL)', [identityId, accountId, 'firebase_password', firebaseUid, 'LINKED', timestamp]);
-      await database.query('INSERT INTO platform_admin_entitlements (id, account_id, status, granted_at, granted_by_account_id, revoked_at, revoked_by_account_id, created_by_account_id, updated_by_account_id) VALUES ($1, $2, $3, $4, NULL, NULL, NULL, NULL, NULL)', [entitlementId, accountId, 'ACTIVE', timestamp]);
+      await database.query('INSERT INTO platform_admin_entitlements (id, account_id, status, granted_at, granted_by_account_id, revoked_at, revoked_by_account_id) VALUES ($1, $2, $3, $4, NULL, NULL, NULL)', [entitlementId, accountId, 'ACTIVE', timestamp]);
 
       return { firebaseUid, accountId, entitlementId, target };
     });
