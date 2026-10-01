@@ -17,7 +17,7 @@ class Repository implements ServiceExposureRepository {
 
 function setup() {
   const repository = new Repository(); const events: unknown[]=[];
-  const context = { require: async (accountId: string, tenantId: string, permission: string) => { if (accountId !== 'clinic-owner' && accountId !== 'clinic-admin' || tenantId !== 'tenant-a' || permission !== 'clinic.manage') throw new Error('FORBIDDEN'); return { id:'membership',accountId,tenantId,role:'CLINIC_OWNER' as const,status:'ACTIVE' as const }; } };
+  const context = { require: async (accountId: string, tenantId: string, permission: string) => { if (accountId !== 'clinic-owner' && accountId !== 'clinic-admin' || tenantId !== 'tenant-a' || permission !== 'clinic.manage') throw new Error('FORBIDDEN'); return { id:'membership',accountId,tenantId,role:'CLINIC_OWNER' as const,status:'ACTIVE' as const }; }, isPlatformAdministrator: async (accountId: string) => accountId === 'platform-admin' };
   return { repository, events, service: new ServiceExposureService(repository, context, { append: async (event) => { events.push(event); } }) };
 }
 
@@ -29,6 +29,12 @@ describe('theCliniQ Phase 5 Service Exposure', () => {
     await expect(service.unpublish('doctor-account',exposure.id)).resolves.toMatchObject({status:'UNPUBLISHED'});
     await expect(service.publish('doctor-account',exposure.id)).resolves.toMatchObject({status:'PUBLISHED'});
     await expect(service.unpublish('other-doctor',exposure.id)).rejects.toBeInstanceOf(ServiceExposureError);
+  });
+
+  it('allows a persisted Platform Admin, but not an ordinary account, to manage doctor-owned exposure lifecycle', async () => {
+    const { service }=setup(); const exposure=await service.create('doctor-account',doctorOffering.id);
+    await expect(service.publish('platform-admin',exposure.id)).resolves.toMatchObject({status:'PUBLISHED'});
+    await expect(service.unpublish('support-account',exposure.id)).rejects.toBeInstanceOf(ServiceExposureError);
   });
 
   it('uses clinic.manage for clinic-owned exposure and denies staff, patients, and network participants', async () => {

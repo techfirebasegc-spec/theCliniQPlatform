@@ -13,6 +13,11 @@ export interface AuditRepository {
   append(event: AuditEventInput): Promise<void>;
 }
 
+/** Audit writer for lifecycle operations whose state transition and audit event must commit together. */
+export interface TransactionalAuditRepository extends AuditRepository {
+  appendInTransaction(database: import('../sessions/postgres-session-repository.js').PostgresExecutor, event: AuditEventInput): Promise<void>;
+}
+
 export async function recordAuthorizationDenial(repository: AuditRepository, actorAccountId: string, tenantId: string): Promise<void> {
   await repository.append({ category: 'AUTHORIZATION', eventType: 'TENANT_ACCESS_DENIED', actorAccountId, tenantId, targetType: 'TENANT', targetId: tenantId, outcome: 'DENIED' });
 }

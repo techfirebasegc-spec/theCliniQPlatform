@@ -1,12 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createIdentifier } from '../../shared/identifiers/uuid.js';
-import { assertTenantPermission, type TenantMembershipContext, type TenantPermission, type TenantRole } from '../authorization/authorization.js';
+import { hasTenantPermission, type TenantMembershipContext, type TenantPermission, type TenantRole } from '../authorization/authorization.js';
 import type { AuditRepository } from '../audit/audit.js';
 import type { PostgresExecutor } from '../sessions/postgres-session-repository.js';
 
 export type MembershipStatus = 'INVITED' | 'ACTIVE' | 'SUSPENDED' | 'REMOVED' | 'EXPIRED';
 export type InvitationStatus = 'INVITED' | 'ACCEPTED' | 'REJECTED' | 'REVOKED' | 'EXPIRED';
 export type TenantMembership = TenantMembershipContext & { id: string };
+export type TenantAuthorizationContext = { kind: 'TENANT_MEMBERSHIP'; membership: TenantMembership } | { kind: 'PLATFORM_ADMIN'; accountId: string; tenantId: string };
 export type TenantInvitation = { id: string; tenantId: string; targetAccountId: string; createdByAccountId: string; role: TenantRole; status: InvitationStatus; expiresAt: Date };
 type InvitationAcceptanceOutcome = { kind: 'EXPIRED'; invitation: TenantInvitation } | { kind: 'ACCEPTED'; membership: TenantMembership };
 export class MembershipAccessError extends Error { public constructor(public readonly code: 'FORBIDDEN' | 'CONFLICT') { super(code === 'FORBIDDEN' ? 'Tenant access is not permitted.' : 'The requested membership operation cannot be completed.'); } }
@@ -28,23 +29,30 @@ export interface MembershipRepository {
   updateMembership(database: PostgresExecutor, tenantId: string, membershipId: string, status: MembershipStatus, role: TenantRole, actorAccountId: string): Promise<TenantMembership | null>;
 }
 
+export interface PlatformAdminAuthorizer {
+  hasActiveEntitlement(accountId: string): Promise<boolean>;
+  hasActiveEntitlementInTransaction(database: PostgresExecutor, accountId: string): Promise<boolean>;
+}
+
 export class TenantContextService {
-  public constructor(private readonly repository: MembershipRepository, private readonly audit: AuditRepository) {}
-  public async require(accountId: string, tenantId: string, permission: TenantPermission): Promise<TenantMembership> {
+  public constructor(private readonly repository: MembershipRepository, private readonly audit: AuditRepository, private readonly platformAdmins?: PlatformAdminAuthorizer) {}
+  public async require(accountId: string, tenantId: string, permission: TenantPermission): Promise<TenantAuthorizationContext> {
     const context = await this.repository.findActiveContext(accountId, tenantId);
-    try { assertTenantPermission(context, accountId, tenantId, permission); } catch {
-      await this.audit.append({ category: 'AUTHORIZATION', eventType: 'TENANT_CONTEXT_DENIED', actorAccountId: accountId, tenantId, targetType: 'TENANT', targetId: tenantId, outcome: 'DENIED' });
-      throw new MembershipAccessError('FORBIDDEN');
-    }
-    return context!;
+    if (hasTenantPermission(context, accountId, tenantId, permission)) return { kind: 'TENANT_MEMBERSHIP', membership: context! };
+    if (this.platformAdmins && await this.platformAdmins.hasActiveEntitlement(accountId)) return { kind: 'PLATFORM_ADMIN', accountId, tenantId };
+    await this.audit.append({ category: 'AUTHORIZATION', eventType: 'TENANT_CONTEXT_DENIED', actorAccountId: accountId, tenantId, targetType: 'TENANT', targetId: tenantId, outcome: 'DENIED' });
+    throw new MembershipAccessError('FORBIDDEN');
   }
-  public async requireInTransaction(database: PostgresExecutor, accountId: string, tenantId: string, permission: TenantPermission): Promise<TenantMembership> {
+  public async requireInTransaction(database: PostgresExecutor, accountId: string, tenantId: string, permission: TenantPermission): Promise<TenantAuthorizationContext> {
     const context = await this.repository.findActiveContextForUpdate(database, accountId, tenantId);
-    try { assertTenantPermission(context, accountId, tenantId, permission); } catch {
-      await this.audit.append({ category: 'AUTHORIZATION', eventType: 'TENANT_CONTEXT_DENIED', actorAccountId: accountId, tenantId, targetType: 'TENANT', targetId: tenantId, outcome: 'DENIED' });
-      throw new MembershipAccessError('FORBIDDEN');
-    }
-    return context!;
+    if (hasTenantPermission(context, accountId, tenantId, permission)) return { kind: 'TENANT_MEMBERSHIP', membership: context! };
+    if (this.platformAdmins && await this.platformAdmins.hasActiveEntitlementInTransaction(database, accountId)) return { kind: 'PLATFORM_ADMIN', accountId, tenantId };
+    await this.audit.append({ category: 'AUTHORIZATION', eventType: 'TENANT_CONTEXT_DENIED', actorAccountId: accountId, tenantId, targetType: 'TENANT', targetId: tenantId, outcome: 'DENIED' });
+    throw new MembershipAccessError('FORBIDDEN');
+  }
+
+  public async isPlatformAdministrator(accountId: string): Promise<boolean> {
+    return this.platformAdmins ? this.platformAdmins.hasActiveEntitlement(accountId) : false;
   }
 }
 
@@ -57,7 +65,7 @@ export class MembershipService {
     try {
       await this.repository.transaction(async (database) => {
         const actor = await this.context.requireInTransaction(database, actorAccountId, tenantId, 'membership.invite');
-        if (role === 'CLINIC_OWNER' && actor.role !== 'CLINIC_OWNER') throw new MembershipAccessError('FORBIDDEN');
+        if (role === 'CLINIC_OWNER' && !canManageOwners(actor)) throw new MembershipAccessError('FORBIDDEN');
         if (await this.repository.activeMembership(database, tenantId, targetAccountId)) throw new MembershipAccessError('CONFLICT');
         await this.repository.createInvitation(database, { ...invitation, secretHash: secretHash(secret) });
       });
@@ -95,9 +103,9 @@ export class MembershipService {
       const current = await this.repository.lockMembership(database, tenantId, membershipId);
       if (!current) throw new MembershipAccessError('FORBIDDEN');
       if (!isMembershipStatus(status) || !isTenantRole(role)) throw new MembershipAccessError('FORBIDDEN');
-      if (role === 'CLINIC_OWNER' && actor.role !== 'CLINIC_OWNER') throw new MembershipAccessError('FORBIDDEN');
+      if (role === 'CLINIC_OWNER' && !canManageOwners(actor)) throw new MembershipAccessError('FORBIDDEN');
       if (current.role === 'CLINIC_OWNER' && current.status === 'ACTIVE' && (status !== 'ACTIVE' || role !== 'CLINIC_OWNER')) {
-        if (actor.role !== 'CLINIC_OWNER') throw new MembershipAccessError('FORBIDDEN');
+        if (!canManageOwners(actor)) throw new MembershipAccessError('FORBIDDEN');
         const owners = await this.repository.lockActiveOwners(database, tenantId);
         if (owners.length <= 1) throw new MembershipAccessError('CONFLICT');
       }
@@ -129,3 +137,4 @@ export class MembershipService {
 export function secretHash(value: string): string { return createHash('sha256').update(value).digest('base64url'); }
 function isTenantRole(value: string): value is TenantRole { return roles.includes(value as TenantRole); }
 function isMembershipStatus(value: string): value is MembershipStatus { return membershipStatuses.includes(value as MembershipStatus); }
+function canManageOwners(context: TenantAuthorizationContext): boolean { return context.kind === 'PLATFORM_ADMIN' || context.membership.role === 'CLINIC_OWNER'; }

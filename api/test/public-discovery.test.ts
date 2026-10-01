@@ -1,19 +1,22 @@
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { registerErrorHandler } from '../src/middleware/errors.js';
-import { PublicDiscoveryService, type PublicDiscoveryRepository, type PublicDoctor, type PublicService } from '../src/modules/discovery/public-discovery.js';
+import { PublicDiscoveryService, type PublicClinic, type PublicDiscoveryRepository, type PublicDoctor, type PublicService } from '../src/modules/discovery/public-discovery.js';
 import type { BookableService } from '../src/modules/appointments/appointments.js';
 import { registerPublicDiscoveryRoutes } from '../src/routes/public-discovery.js';
 
 const doctors: PublicDoctor[] = [{ id: 'doctor-a', displayName: 'Doctor A' }];
-const services: PublicService[] = [{ id: 'exposure-a', doctorProfileId: 'doctor-a', name: 'Consultation', description: 'Consultation description', currency: 'INR', amountMinor: '10000' }];
+const clinics: PublicClinic[] = [{ id: 'clinic-a', displayName: 'Clinic A' }];
+const services: PublicService[] = [{ id: 'exposure-a', provider: { kind: 'DOCTOR', doctorProfileId: 'doctor-a' }, name: 'Consultation', description: 'Consultation description', currency: 'INR', amountMinor: '10000' }];
 function bookable(versionId = 'version-a', windowStart = 36_000, windowEnd = 39_600): BookableService { return { provider: { kind: 'DOCTOR', doctorProfileId: 'doctor-a' }, serviceOfferingId: 'offering-a', versionId, priceId: `private-${versionId}`, currency: 'INR', priceAmountMinor: 10_000n, bookingTenantId: null, timezone: 'Asia/Kolkata', slotDurationSeconds: 1800, durationSeconds: 1800, bufferBeforeSeconds: 0, bufferAfterSeconds: 0, capacity: 2, bookingLeadSeconds: 0, bookingHorizonSeconds: 86_400 * 30, holdSeconds: 600, rules: [{ canonicalRecurrence: 'FREQ=WEEKLY;BYDAY=MO', effectiveFrom: new Date('2020-01-01T00:00:00Z'), effectiveTo: null, windows: [{ kind: 'WORKING', weekday: 1, startSeconds: windowStart, endSeconds: windowEnd }] }], exceptions: [] }; }
 
 class Repository implements PublicDiscoveryRepository {
   public activeCapacity = 0; public candidates = [bookable()]; public resolved = (localStart: string) => this.candidates.find(() => localStart) ?? null;
   async listDoctors(query: string | undefined) { return query ? doctors.filter((doctor) => doctor.displayName?.toLowerCase().includes(query.toLowerCase())) : doctors; }
   async findDoctor(id: string) { return doctors.find((doctor) => doctor.id === id) ?? null; }
-  async listServices(filter: { doctorProfileId?: string; query?: string }) { return services.filter((service) => (!filter.doctorProfileId || service.doctorProfileId === filter.doctorProfileId) && (!filter.query || service.name.toLowerCase().includes(filter.query.toLowerCase()))); }
+  async listClinics(query: string | undefined) { return query ? clinics.filter((clinic) => clinic.displayName.toLowerCase().includes(query.toLowerCase())) : clinics; }
+  async findClinic(id: string) { return clinics.find((clinic) => clinic.id === id) ?? null; }
+  async listServices(filter: { doctorProfileId?: string; clinicId?: string; query?: string }) { return services.filter((service) => (!filter.doctorProfileId || (service.provider.kind === 'DOCTOR' && service.provider.doctorProfileId === filter.doctorProfileId)) && (!filter.clinicId || (service.provider.kind === 'CLINIC' && service.provider.clinicId === filter.clinicId)) && (!filter.query || service.name.toLowerCase().includes(filter.query.toLowerCase()))); }
   async findCandidateServices(id: string) { return id === 'exposure-a' ? this.candidates : []; }
   async findBookableService(id: string, localStart: string) { return id === 'exposure-a' ? this.resolved(localStart) : null; }
   async activeCapacityUnits() { return this.activeCapacity; }
@@ -29,6 +32,13 @@ describe('Phase 8.6 public discovery', () => {
   });
   it('returns public doctor details with only that doctor\'s public services and hides ineligible doctors', async () => {
     const { app } = setup(); const response = await app.inject({ method: 'GET', url: '/v1/public/doctors/doctor-a' }); expect(response.statusCode).toBe(200); expect(response.json()).toEqual({ doctor: doctors[0], services }); expect((await app.inject({ method: 'GET', url: '/v1/public/doctors/doctor-ineligible' })).statusCode).toBe(404); await app.close();
+  });
+  it('returns public clinics and rejects unknown clinic profiles without a session', async () => {
+    const { app } = setup();
+    expect((await app.inject({ method: 'GET', url: '/v1/public/clinics?q=clinic' })).json()).toEqual({ items: clinics });
+    expect((await app.inject({ method: 'GET', url: '/v1/public/clinics/clinic-a' })).json()).toEqual({ clinic: clinics[0], services: [] });
+    expect((await app.inject({ method: 'GET', url: '/v1/public/clinics/clinic-hidden' })).statusCode).toBe(404);
+    await app.close();
   });
   it('generates slots from a non-midnight-aligned working window', async () => {
     const { app, repository } = setup(); repository.candidates = [bookable('version-a', 33_300, 38_700)];

@@ -54,6 +54,12 @@ describe('production CORS origins', () => {
     expect(response.headers['access-control-allow-credentials']).toBe('true');
   });
 
+  it('allows the explicit local Patient development origin', async () => {
+    const response = await corsResponse('http://localhost:3000');
+    expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(response.headers['access-control-allow-credentials']).toBe('true');
+  });
+
   it('allows the explicit local Admin development origin', async () => {
     const response = await corsResponse('http://localhost:3001');
     expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3001');

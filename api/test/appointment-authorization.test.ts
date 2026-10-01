@@ -82,6 +82,14 @@ describe('theCliniQ Phase 5.4 appointment operational access', () => {
 });
 
 describe('theCliniQ transactional appointment authorization', () => {
+  it('permits an explicit Platform Admin entitlement for any appointment without granting that authority to an ordinary account', async () => {
+    const { repository, audit } = setup();
+    const service = new AppointmentAuthorizationService(repository, { require: async () => { throw new Error('not used'); }, requireInTransaction: async () => { throw new Error('not used'); } }, { append: async (event) => { audit.push(event); } }, { authorize: async (accountId) => accountId === 'platform-admin' });
+    await expect(service.authorize('platform-admin', 'appointment-clinic', 'appointment.complete')).resolves.toEqual(patientClinic);
+    await expect(service.authorizeInTransaction({ query: undefined as never }, 'platform-admin', 'appointment-doctor', 'appointment.cancel')).resolves.toEqual(patientDoctor);
+    await expect(service.authorize('support-account', 'appointment-clinic', 'appointment.view')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('revalidates current doctor eligibility and clinic permission under the lifecycle transaction', async () => {
     const { service, repository, permissions } = setup();
     await expect(service.authorizeInTransaction({ query: undefined as never }, 'doctor-account', 'appointment-doctor', 'appointment.cancel')).resolves.toEqual(patientDoctor);

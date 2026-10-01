@@ -12,10 +12,22 @@ import { ProfileService } from './modules/profiles/profiles.js';
 import { PostgresSessionRepository } from './modules/sessions/postgres-session-repository.js';
 import { FirebaseSessionBridge } from './modules/sessions/firebase-session-bridge.js';
 import { AdminFirebaseSessionBridge } from './modules/sessions/admin-firebase-session-bridge.js';
-import { AccountIdentityService, adminFirebaseIdentityProviders, FirebaseAdminIdentityVerifier, FirebaseProviderPolicyVerifier, sharedFirebaseIdentityProviders } from './modules/identity/identity.js';
+import { AccountIdentityService, adminFirebaseIdentityProviders, FirebaseAdminIdentityVerifier, FirebaseProviderPolicyVerifier, ownerFirebaseIdentityProviders, sharedFirebaseIdentityProviders } from './modules/identity/identity.js';
 import { PostgresAccountIdentityRepository } from './modules/identity/postgres-account-identity-repository.js';
 import { registerAuthSessionRoutes } from './routes/auth-sessions.js';
 import { registerAdminAuthSessionRoutes } from './routes/admin-auth-sessions.js';
+import { registerTenantOwnerOnboardingRoutes } from './routes/tenant-owner-onboarding.js';
+import { TenantFirebaseSessionBridge } from './modules/sessions/tenant-firebase-session-bridge.js';
+import { PostgresTenantOwnerOnboardingRepository } from './modules/tenant-onboarding/postgres-tenant-owner-onboarding-repository.js';
+import { TenantOwnerOnboardingService } from './modules/tenant-onboarding/tenant-owner-onboarding.js';
+import { registerAdminReadRoutes } from './routes/admin-read.js';
+import { AdminReadService } from './modules/admin-read/admin-read.js';
+import { PostgresAdminReadRepository } from './modules/admin-read/postgres-admin-read-repository.js';
+import { registerPlatformAdminRoutes } from './routes/platform-admin.js';
+import { PlatformAdminService } from './modules/platform-admin/platform-admin.js';
+import { PostgresPlatformAdminRepository } from './modules/platform-admin/postgres-platform-admin-repository.js';
+import { PublicDiscoveryControlService } from './modules/platform-admin/public-discovery-control.js';
+import { PostgresPublicDiscoveryControlRepository } from './modules/platform-admin/postgres-public-discovery-control-repository.js';
 import { PlatformAdminEntitlementService, PostgresPlatformAdminEntitlementRepository } from './modules/admin-access/admin-entitlements.js';
 import { PostgresTenantRepository } from './modules/tenants/postgres-tenant-repository.js';
 import { TenantClinicService } from './modules/tenants/tenants.js';
@@ -39,6 +51,9 @@ import { PostgresDelegatedBookingRepository } from './modules/appointments/postg
 import { registerServiceExposureRoutes } from './routes/service-exposures.js';
 import { PostgresServiceExposureRepository } from './modules/service-exposures/postgres-service-exposure-repository.js';
 import { ServiceExposureService } from './modules/service-exposures/service-exposures.js';
+import { registerClinicServiceDoctorAssignmentRoutes } from './routes/clinic-service-doctors.js';
+import { PostgresClinicServiceDoctorAssignmentRepository } from './modules/clinic-service-doctors/postgres-clinic-service-doctors-repository.js';
+import { ClinicServiceDoctorAssignmentService } from './modules/clinic-service-doctors/clinic-service-doctors.js';
 import { PaymentHandoffService } from './modules/appointments/payment-handoffs.js';
 import { PostgresPaymentHandoffRepository } from './modules/appointments/postgres-payment-handoff-repository.js';
 import { resolvePaymentProviderKey } from './modules/financial/provider-registry.js';
@@ -68,6 +83,29 @@ import { registerAppointmentPrescriptionRoutes } from './routes/appointment-pres
 import { registerPublicDiscoveryRoutes } from './routes/public-discovery.js';
 import { PublicDiscoveryService } from './modules/discovery/public-discovery.js';
 import { PostgresPublicDiscoveryRepository } from './modules/discovery/postgres-public-discovery-repository.js';
+import { registerProviderPortalRoutes } from './routes/provider-portal.js';
+import { ProviderPortalService } from './modules/provider-portal/provider-portal.js';
+import { PostgresProviderPortalRepository } from './modules/provider-portal/postgres-provider-portal-repository.js';
+import { ProviderFirebaseSessionBridge } from './modules/sessions/provider-firebase-session-bridge.js';
+import { ProviderPasswordIdentityLinkService } from './modules/sessions/provider-password-identity-link.js';
+import { registerProviderAuthSessionRoutes } from './routes/provider-auth-sessions.js';
+import { registerDoctorInvitationAcceptanceRoutes } from './routes/doctor-invitation-acceptance.js';
+import { registerInvitationPreviewRoutes } from './routes/invitation-preview.js';
+import { DoctorInvitationAcceptanceService } from './modules/platform-admin/doctor-invitation-acceptance.js';
+import { PostgresDoctorInvitationAcceptanceRepository } from './modules/platform-admin/postgres-doctor-invitation-acceptance-repository.js';
+import { DoctorVerificationService } from './modules/doctor-verification/doctor-verification.js';
+import { PostgresDoctorVerificationRepository } from './modules/doctor-verification/postgres-doctor-verification-repository.js';
+import { registerDoctorVerificationRoutes } from './routes/doctor-verification.js';
+import { VerificationEvidenceService } from './modules/doctor-verification/verification-evidence.js';
+import { PostgresVerificationEvidenceRepository } from './modules/doctor-verification/postgres-verification-evidence-repository.js';
+import { registerDoctorVerificationEvidenceRoutes } from './routes/doctor-verification-evidence.js';
+import { DoctorApplicationService } from './modules/doctor-applications/doctor-applications.js';
+import { PostgresDoctorApplicationRepository } from './modules/doctor-applications/postgres-doctor-application-repository.js';
+import { registerDoctorApplicationRoutes } from './routes/doctor-applications.js';
+import { ClinicApplicationService } from './modules/clinic-applications/clinic-applications.js';
+import { PostgresClinicApplicationRepository } from './modules/clinic-applications/postgres-clinic-application-repository.js';
+import { registerClinicApplicationRoutes } from './routes/clinic-applications.js';
+import { AicS3StorageProvider } from './modules/files/aic-s3-storage-provider.js';
 import { browserOrigins } from './config/browser-origins.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -115,14 +153,53 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   }));
   const audit = new PostgresAuditRepository(services.database);
   const memberships = new PostgresMembershipRepository(services.database);
-  const context = new TenantContextService(memberships, audit);
-  const appointmentAuthorization = new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit);
+  const platformAdmins = new PlatformAdminEntitlementService(new PostgresPlatformAdminEntitlementRepository(services.database));
+  const context = new TenantContextService(memberships, audit, platformAdmins);
+  const doctorVerification = new DoctorVerificationService(new PostgresDoctorVerificationRepository(services.database), platformAdmins, audit);
+  const doctorApplications = new DoctorApplicationService(new PostgresDoctorApplicationRepository(services.database), platformAdmins, audit);
+  const verificationEvidence = new VerificationEvidenceService(new PostgresVerificationEvidenceRepository(services.database), AicS3StorageProvider.fromEnvironment(environment), environment.AIC_S3_BUCKET, platformAdmins, audit);
+  const ownerOnboarding = new PostgresTenantOwnerOnboardingRepository(services.database);
+  const tenantOwnerOnboarding = new TenantOwnerOnboardingService(ownerOnboarding, platformAdmins);
+  const clinicApplications = new ClinicApplicationService(new PostgresClinicApplicationRepository(services.database), platformAdmins, tenantOwnerOnboarding, audit);
+  const sessionPolicy = { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS };
+  const sessionRepository = new PostgresSessionRepository(services.database);
+  const providerPortal = new PostgresProviderPortalRepository(services.database);
+  void app.register(async (instance) => registerDoctorInvitationAcceptanceRoutes(instance, { acceptance: new DoctorInvitationAcceptanceService(new PostgresDoctorInvitationAcceptanceRepository(services.database)), firebaseProjectId: environment.FIREBASE_PROJECT_ID }));
+  void app.register(async (instance) => registerInvitationPreviewRoutes(instance, { database: services.database }));
+  void app.register(async (instance) => registerProviderAuthSessionRoutes(instance, {
+    sessions: new ProviderFirebaseSessionBridge(new PostgresAccountIdentityRepository(services.database), new FirebaseProviderPolicyVerifier(new FirebaseAdminIdentityVerifier(environment.FIREBASE_PROJECT_ID), ownerFirebaseIdentityProviders), { create: sessionRepository.create.bind(sessionRepository), hasActiveProviderAccess: providerPortal.hasActiveProviderAccess.bind(providerPortal) }, sessionPolicy),
+    passwordIdentityLinks: new ProviderPasswordIdentityLinkService(new PostgresAccountIdentityRepository(services.database), new FirebaseProviderPolicyVerifier(new FirebaseAdminIdentityVerifier(environment.FIREBASE_PROJECT_ID), ['firebase_password']), audit),
+    sessionRepository,
+    sessionPolicy,
+  }));
+  void app.register(async (instance) => registerTenantOwnerOnboardingRoutes(instance, {
+    onboarding: tenantOwnerOnboarding,
+    tenantSessions: new TenantFirebaseSessionBridge(new PostgresAccountIdentityRepository(services.database), new FirebaseProviderPolicyVerifier(new FirebaseAdminIdentityVerifier(environment.FIREBASE_PROJECT_ID), ownerFirebaseIdentityProviders), { create: sessionRepository.create.bind(sessionRepository), hasActiveOwnerMembership: ownerOnboarding.hasActiveOwnerMembership.bind(ownerOnboarding) }, sessionPolicy),
+    sessions: sessionRepository,
+    sessionPolicy,
+    environment,
+  }));
+  void app.register(async (instance) => registerPlatformAdminRoutes(instance, {
+    platform: new PlatformAdminService(new PostgresPlatformAdminRepository(services.database), platformAdmins, audit),
+    discovery: new PublicDiscoveryControlService(new PostgresPublicDiscoveryControlRepository(services.database), platformAdmins),
+    sessions: sessionRepository,
+    sessionPolicy,
+  }));
+  void app.register(async (instance) => registerDoctorVerificationRoutes(instance, { verification: doctorVerification, sessions: sessionRepository, sessionPolicy }));
+  void app.register(async (instance) => registerDoctorApplicationRoutes(instance, { applications: doctorApplications, sessions: sessionRepository, sessionPolicy }));
+  void app.register(async (instance) => registerClinicApplicationRoutes(instance, { applications: clinicApplications, sessions: sessionRepository, sessionPolicy }));
+  void app.register(async (instance) => registerDoctorVerificationEvidenceRoutes(instance, { evidence: verificationEvidence, sessions: sessionRepository, sessionPolicy }));
+  const elevatedAppointmentAuthorization = { authorize: async (accountId: string) => platformAdmins.hasActiveEntitlement(accountId) };
+  void app.register(async (instance) => registerAdminReadRoutes(instance, { reads: new AdminReadService(new PostgresAdminReadRepository(services.database), context, platformAdmins), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
+  const appointmentAuthorization = new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit, elevatedAppointmentAuthorization);
+  void app.register(async (instance) => registerProviderPortalRoutes(instance, { portal: new ProviderPortalService(providerPortal, context), sessions: sessionRepository, sessionPolicy }));
   void app.register(async (instance) => registerClinicRoutes(instance, { clinics: new TenantClinicService(new PostgresTenantRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerMembershipRoutes(instance, { memberships: new MembershipService(memberships, context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerNetworkRoutes(instance, { network: new NetworkService(new PostgresNetworkRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerServiceOfferingRoutes(instance, { offerings: new ServiceOfferingService(new PostgresServiceOfferingRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerAvailabilityRoutes(instance, { availability: new AvailabilityService(new PostgresAvailabilityRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   void app.register(async (instance) => registerServiceExposureRoutes(instance, { exposures: new ServiceExposureService(new PostgresServiceExposureRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
+  void app.register(async (instance) => registerClinicServiceDoctorAssignmentRoutes(instance, { assignments: new ClinicServiceDoctorAssignmentService(new PostgresClinicServiceDoctorAssignmentRepository(services.database), context, audit), sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS } }));
   const paymentProvider = environment.RAZORPAY_KEY_ID && environment.RAZORPAY_KEY_SECRET && environment.RAZORPAY_WEBHOOK_SECRET
     ? new RazorpayPaymentProvider(environment.RAZORPAY_KEY_ID, environment.RAZORPAY_KEY_SECRET, environment.RAZORPAY_WEBHOOK_SECRET)
     : undefined;
@@ -142,11 +219,11 @@ export function createApp(environment: Environment, dependencies?: AppDependenci
   }));
   void app.register(async (instance) => registerRazorpayWebhookRoutes(instance, { confirmation }));
   void app.register(async (instance) => registerAppointmentCancellationRoutes(instance, {
-    cancellations: new CancellationService(cancellationRefunds, new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)), refunds: refundExecution,
+    cancellations: new CancellationService(cancellationRefunds, new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit, elevatedAppointmentAuthorization)), refunds: refundExecution,
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
   void app.register(async (instance) => registerAppointmentRescheduleRoutes(instance, {
-    reschedules: new RescheduleService(new PostgresAppointmentRepository(services.database), new PostgresRescheduleRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit)),
+    reschedules: new RescheduleService(new PostgresAppointmentRepository(services.database), new PostgresRescheduleRepository(services.database), new AppointmentAuthorizationService(new PostgresAppointmentAuthorizationRepository(services.database), context, audit, elevatedAppointmentAuthorization)),
     sessions: new PostgresSessionRepository(services.database), sessionPolicy: { idleTtlSeconds: environment.SESSION_IDLE_TTL_SECONDS, absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS },
   }));
   void app.register(async (instance) => registerAppointmentOperationRoutes(instance, {

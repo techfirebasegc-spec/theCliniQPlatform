@@ -29,7 +29,7 @@ export interface ServiceOfferingRepository {
 }
 
 export class ServiceOfferingService {
-  public constructor(private readonly repository: ServiceOfferingRepository, private readonly context: Pick<TenantContextService, 'require'>, private readonly audit: AuditRepository) {}
+  public constructor(private readonly repository: ServiceOfferingRepository, private readonly context: Pick<TenantContextService, 'require'> & Partial<Pick<TenantContextService, 'isPlatformAdministrator'>>, private readonly audit: AuditRepository) {}
 
   public async create(accountId: string | undefined, input: ServiceOfferingInput): Promise<ServiceOffering> {
     const actor = this.requireAccount(accountId);
@@ -88,6 +88,7 @@ export class ServiceOfferingService {
   private async authorizeNewOwner(accountId: string, owner: ServiceOfferingInput['owner']): Promise<ServiceOfferingOwner> {
     if (owner.kind === 'DOCTOR') {
       if (await this.repository.doctorProfileOwned(accountId, owner.doctorProfileId)) return owner;
+      if (await this.isPlatformAdmin(accountId)) return owner;
       return this.denied(accountId, owner.doctorProfileId);
     }
     const tenantId = await this.repository.clinicTenant(owner.clinicId);
@@ -101,11 +102,15 @@ export class ServiceOfferingService {
     if (doctorOwned) return doctorOwned;
     const offering = await this.repository.find(offeringId);
     if (!offering) return this.denied(accountId, offeringId);
-    if (offering.owner.kind !== 'CLINIC') return this.denied(accountId, offeringId);
+    if (offering.owner.kind === 'DOCTOR') {
+      if (await this.isPlatformAdmin(accountId)) return offering;
+      return this.denied(accountId, offeringId);
+    }
     try { await this.context.require(accountId, offering.owner.tenantId, 'clinic.manage'); return offering; } catch { return this.denied(accountId, offeringId, offering.owner.tenantId); }
   }
 
   private requireAccount(accountId: string | undefined): string { if (!accountId) throw new ServiceOfferingError('UNAUTHORIZED'); return accountId; }
+  private async isPlatformAdmin(accountId: string): Promise<boolean> { return this.context.isPlatformAdministrator ? this.context.isPlatformAdministrator(accountId) : false; }
   private async denied(accountId: string, targetId: string, tenantId?: string): Promise<never> { await this.audit.append({ category: 'AUTHORIZATION', eventType: 'SERVICE_OFFERING_ACCESS_DENIED', actorAccountId: accountId, tenantId, targetType: 'SERVICE_OFFERING', targetId, outcome: 'DENIED' }); throw new ServiceOfferingError('FORBIDDEN'); }
   private async conflict(accountId: string, targetType: string, targetId: string, tenantId?: string): Promise<never> { await this.audit.append({ category: 'SECURITY', eventType: 'SERVICE_OFFERING_VERSION_REJECTED', actorAccountId: accountId, tenantId, targetType, targetId, outcome: 'DENIED' }); throw new ServiceOfferingError('CONFLICT'); }
   private async failed(accountId: string, targetType: string, targetId: string, tenantId: string | undefined, error: unknown): Promise<never> { if (error instanceof ServiceOfferingError) throw error; if (isConstraintError(error)) return this.conflict(accountId, targetType, targetId, tenantId); await this.audit.append({ category: 'SECURITY', eventType: 'SERVICE_OFFERING_OPERATION_DENIED', actorAccountId: accountId, tenantId, targetType, targetId, outcome: 'DENIED' }); throw new ServiceOfferingError('FORBIDDEN'); }

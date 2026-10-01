@@ -16,7 +16,7 @@ function appWith(options: { identity?: VerifiedFirebaseIdentity; verify?: Fireba
   const sessions: AdminSessionBridgeRepository = { create: async (accountId: string, session: NewSession) => { created.push({ accountId, secretHash: session.secretHash }); } };
   const verifier: FirebaseIdentityVerifier = { verify: options.verify ?? (async () => options.identity ?? passwordIdentity) };
   const identities = { findByProviderSubject: async () => options.account === undefined ? activeAccount : options.account };
-  const entitlements = new PlatformAdminEntitlementService({ hasActiveForAccount: async () => options.entitled ?? true });
+  const entitlements = new PlatformAdminEntitlementService({ hasActiveForAccount: async () => options.entitled ?? true, hasActiveForAccountInTransaction: async () => options.entitled ?? true });
   const app = Fastify();
   registerErrorHandler(app);
   registerAdminAuthSessionRoutes(app, { sessions: new AdminFirebaseSessionBridge(identities, verifier, entitlements, sessions, policy) });

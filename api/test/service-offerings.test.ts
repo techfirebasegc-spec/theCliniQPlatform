@@ -1,5 +1,9 @@
+import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { ServiceOfferingError, ServiceOfferingService, type ServiceOffering, type ServiceOfferingRepository, type ServiceOfferingVersion } from '../src/modules/service-offerings/service-offerings.js';
+import { registerErrorHandler } from '../src/middleware/errors.js';
+import { registerServiceOfferingRoutes } from '../src/routes/service-offerings.js';
+import { hashSessionSecret, type SessionAuthenticatorRepository } from '../src/modules/sessions/session.js';
 
 class Repository implements ServiceOfferingRepository {
   public offerings = new Map<string, ServiceOffering>();
@@ -25,12 +29,31 @@ function overlaps(left: ServiceOfferingVersion, right: ServiceOfferingVersion) {
 function setup() {
   const repository = new Repository(); const audit = { events: [] as unknown[], append: async (event: unknown) => { audit.events.push(event); } };
   const allowed = new Set(['account-clinic-owner:tenant-a', 'account-clinic-admin:tenant-a']);
-  const context = { require: async (accountId: string, tenantId: string, permission: string) => { if (permission !== 'clinic.manage' || !allowed.has(`${accountId}:${tenantId}`)) throw new Error('FORBIDDEN'); return { id: 'membership', accountId, tenantId, role: 'CLINIC_OWNER' as const, status: 'ACTIVE' as const }; } };
+  const context = { require: async (accountId: string, tenantId: string, permission: string) => { if (permission !== 'clinic.manage' || !allowed.has(`${accountId}:${tenantId}`)) throw new Error('FORBIDDEN'); return { id: 'membership', accountId, tenantId, role: 'CLINIC_OWNER' as const, status: 'ACTIVE' as const }; }, isPlatformAdministrator: async (accountId: string) => accountId === 'platform-admin' };
   return { repository, audit, allowed, service: new ServiceOfferingService(repository, context, audit) };
 }
 const active = { versionNumber: 1, status: 'ACTIVE' as const, effectiveFrom: new Date('2026-10-01T00:00:00Z'), currency: 'INR', amountMinor: 12_500n };
 
 describe('theCliniQ Phase 5 Step 1 Service Offering foundation', () => {
+  it('returns applicable and newly created versions with string exact-minor-unit amounts over HTTP', async () => {
+    const { service } = setup();
+    const offering = await service.create('account-doctor-a', { owner: { kind: 'DOCTOR', doctorProfileId: 'doctor-a' }, name: 'Consultation', status: 'ACTIVE' });
+    await service.createVersion('account-doctor-a', offering.id, { ...active, effectiveTo: new Date('2027-01-01T00:00:00Z') });
+    const app = Fastify();
+    registerErrorHandler(app);
+    const sessions: SessionAuthenticatorRepository = { findBySecretHash: async (hash) => hash === hashSessionSecret('doctor') ? { id: 'session', accountId: 'account-doctor-a', status: 'ACTIVE', idleExpiresAt: new Date('2031-01-01'), absoluteExpiresAt: new Date('2031-01-01') } : null, touch: async () => ({ updated: true }) };
+    await registerServiceOfferingRoutes(app, { offerings: service, sessions, sessionPolicy: { idleTtlSeconds: 600, absoluteTtlSeconds: 3600 } });
+
+    const applicable = await app.inject({ method: 'GET', url: `/v1/service-offerings/${offering.id}/versions/applicable?at=2026-10-15T00:00:00.000Z`, headers: { cookie: 'cliniq_session=session.doctor' } });
+    expect(applicable.statusCode).toBe(200);
+    expect(applicable.json()).toMatchObject({ price: { currency: 'INR', amountMinor: '12500' } });
+
+    const created = await app.inject({ method: 'POST', url: `/v1/service-offerings/${offering.id}/versions`, headers: { cookie: 'cliniq_session=session.doctor' }, payload: { versionNumber: 2, status: 'ACTIVE', effectiveFrom: '2027-01-01T00:00:00.000Z', currency: 'INR', amountMinor: '13000' } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ price: { currency: 'INR', amountMinor: '13000' } });
+    await app.close();
+  });
+
   it('lets an authenticated doctor create and manage only their own doctor-owned offering', async () => {
     const { service } = setup(); const offering = await service.create('account-doctor-a', { owner: { kind: 'DOCTOR', doctorProfileId: 'doctor-a' }, name: 'Consultation', status: 'DRAFT' });
     await expect(service.update('account-doctor-a', offering.id, { name: 'Updated', status: 'ACTIVE' })).resolves.toMatchObject({ name: 'Updated', status: 'ACTIVE' });
@@ -46,6 +69,13 @@ describe('theCliniQ Phase 5 Step 1 Service Offering foundation', () => {
     await expect(service.read('patient-account', offering.id)).rejects.toBeInstanceOf(ServiceOfferingError);
     await expect(service.read('account-other-tenant', offering.id)).rejects.toBeInstanceOf(ServiceOfferingError);
     await expect(service.create('account-clinic-owner', { owner: { kind: 'CLINIC', clinicId: 'clinic-b' }, name: 'Cross tenant', status: 'DRAFT' })).rejects.toBeInstanceOf(ServiceOfferingError);
+  });
+
+  it('allows only a persisted Platform Admin to manage doctor-owned offerings they do not own', async () => {
+    const { service } = setup();
+    const offering = await service.create('account-doctor-a', { owner: { kind: 'DOCTOR', doctorProfileId: 'doctor-a' }, name: 'Consultation', status: 'DRAFT' });
+    await expect(service.update('platform-admin', offering.id, { name: 'Platform update', status: 'ACTIVE' })).resolves.toMatchObject({ name: 'Platform update' });
+    await expect(service.update('support-account', offering.id, { name: 'Denied', status: 'ACTIVE' })).rejects.toBeInstanceOf(ServiceOfferingError);
   });
 
   it('rejects unauthenticated, invalid doctor-owner, invalid money, currency, and effective-range operations without owner spoofing', async () => {

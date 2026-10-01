@@ -23,6 +23,20 @@ function setup() {
 function owner(rows: Map<string, TenantMembership>, id: string, accountId = id) { rows.set(id, { id, accountId, tenantId: 'tenant', role: 'CLINIC_OWNER', status: 'ACTIVE' }); }
 function admin(rows: Map<string, TenantMembership>, id: string, accountId = id) { rows.set(id, { id, accountId, tenantId: 'tenant', role: 'CLINIC_ADMIN', status: 'ACTIVE' }); }
 describe('Step 6-8 membership security', () => {
+  it('grants cross-tenant authority only to a persisted Platform Admin without fabricating a tenant membership', async () => {
+    const { rows, audit } = setup();
+    owner(rows, 'owner-a', 'owner-a');
+    const repository: MembershipRepository = {
+      transaction: async (operation) => operation({ query: undefined as never }),
+      findActiveContext: async (accountId, tenantId) => [...rows.values()].find((row) => row.accountId === accountId && row.tenantId === tenantId && row.status === 'ACTIVE') ?? null,
+      findActiveContextForUpdate: async (_database, accountId, tenantId) => [...rows.values()].find((row) => row.accountId === accountId && row.tenantId === tenantId && row.status === 'ACTIVE') ?? null,
+      createInvitation: async () => {}, lockInvitation: async () => null, activeMembership: async () => null, activateMembership: async () => { throw new Error('not used'); }, acceptInvitation: async () => {}, setInvitationStatus: async () => {}, lockActiveOwners: async () => [], lockMembership: async () => null, updateMembership: async () => null,
+    };
+    const context = new TenantContextService(repository, audit, { hasActiveEntitlement: async (accountId) => accountId === 'platform-admin', hasActiveEntitlementInTransaction: async (_database, accountId) => accountId === 'platform-admin' });
+    await expect(context.require('platform-admin', 'unrelated-tenant', 'clinic.manage')).resolves.toEqual({ kind: 'PLATFORM_ADMIN', accountId: 'platform-admin', tenantId: 'unrelated-tenant' });
+    await expect(context.require('owner-a', 'unrelated-tenant', 'clinic.manage')).rejects.toBeInstanceOf(MembershipAccessError);
+  });
+
   it('denies admin self-promotion and promotion of another member, but permits owner promotion', async () => { const { rows, service, audit } = setup(); owner(rows, 'owner'); admin(rows, 'admin'); rows.set('staff', { id: 'staff', accountId: 'staff', tenantId: 'tenant', role: 'CLINIC_STAFF', status: 'ACTIVE' }); await expect(service.change('admin', 'tenant', 'admin', 'ACTIVE', 'CLINIC_OWNER')).rejects.toBeInstanceOf(MembershipAccessError); await expect(service.change('admin', 'tenant', 'staff', 'ACTIVE', 'CLINIC_OWNER')).rejects.toBeInstanceOf(MembershipAccessError); await expect(service.change('owner', 'tenant', 'staff', 'ACTIVE', 'CLINIC_OWNER')).resolves.toMatchObject({ role: 'CLINIC_OWNER' }); expect(audit.events.filter((event) => event.eventType === 'TENANT_MEMBERSHIP_CHANGE_DENIED')).toHaveLength(2); });
   it('denies an admin owner invitation and permits an owner invitation', async () => { const { rows, audit, service } = setup(); owner(rows, 'owner'); admin(rows, 'admin'); await expect(service.invite('admin', 'tenant', 'target-a', 'CLINIC_OWNER', new Date(Date.now() + 60_000))).rejects.toBeInstanceOf(MembershipAccessError); await expect(service.invite('owner', 'tenant', 'target-b', 'CLINIC_OWNER', new Date(Date.now() + 60_000))).resolves.toMatchObject({ invitation: { role: 'CLINIC_OWNER' } }); expect(audit.events.some((event) => event.eventType === 'TENANT_INVITATION_CREATE_DENIED')).toBe(true); });
   it('protects the final owner and permits owner removal when another owner remains', async () => { const { rows, service } = setup(); owner(rows, 'owner-a'); await expect(service.change('owner-a', 'tenant', 'owner-a', 'REMOVED', 'CLINIC_OWNER')).rejects.toBeInstanceOf(MembershipAccessError); owner(rows, 'owner-b'); await expect(service.change('owner-a', 'tenant', 'owner-b', 'REMOVED', 'CLINIC_OWNER')).resolves.toMatchObject({ status: 'REMOVED' }); });

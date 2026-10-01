@@ -21,7 +21,7 @@ export interface ServiceExposureRepository {
 }
 
 export class ServiceExposureService {
-  public constructor(private readonly repository: ServiceExposureRepository, private readonly context: Pick<TenantContextService, 'require'>, private readonly audit: AuditRepository) {}
+  public constructor(private readonly repository: ServiceExposureRepository, private readonly context: Pick<TenantContextService, 'require'> & Partial<Pick<TenantContextService, 'isPlatformAdministrator'>>, private readonly audit: AuditRepository) {}
 
   public async create(accountId: string | undefined, serviceOfferingId: string): Promise<ServiceExposure> {
     const actor = this.account(accountId);
@@ -55,12 +55,17 @@ export class ServiceExposureService {
     const doctorOwned = await this.repository.findDoctorOwnedOffering(offeringId, actor);
     if (doctorOwned) return doctorOwned;
     const offering = await this.repository.findOffering(offeringId);
-    if (!offering || offering.owner.kind !== 'CLINIC') return this.denied(actor, offeringId);
+    if (!offering) return this.denied(actor, offeringId);
+    if (offering.owner.kind === 'DOCTOR') {
+      if (await this.isPlatformAdmin(actor)) return offering;
+      return this.denied(actor, offeringId);
+    }
     try { await this.context.require(actor, offering.owner.tenantId, 'clinic.manage'); return offering; }
     catch { return this.denied(actor, offeringId, offering.owner); }
   }
 
   private account(accountId: string | undefined): string { if (!accountId) throw new ServiceExposureError('UNAUTHORIZED'); return accountId; }
+  private async isPlatformAdmin(accountId: string): Promise<boolean> { return this.context.isPlatformAdministrator ? this.context.isPlatformAdministrator(accountId) : false; }
   private async denied(actor: string, targetId: string, owner?: ServiceOfferingOwner): Promise<never> { await this.audit.append({ category: 'AUTHORIZATION', eventType: 'SERVICE_EXPOSURE_LIFECYCLE_DENIED', actorAccountId: actor, tenantId: owner?.kind === 'CLINIC' ? owner.tenantId : undefined, targetType: 'SERVICE_EXPOSURE', targetId, outcome: 'DENIED' }); throw new ServiceExposureError('FORBIDDEN'); }
   private async conflict(actor: string, targetId: string, owner: ServiceOfferingOwner): Promise<never> { await this.audit.append({ category: 'SECURITY', eventType: 'SERVICE_EXPOSURE_LIFECYCLE_DENIED', actorAccountId: actor, tenantId: owner.kind === 'CLINIC' ? owner.tenantId : undefined, targetType: 'SERVICE_EXPOSURE', targetId, outcome: 'DENIED' }); throw new ServiceExposureError('CONFLICT'); }
 }

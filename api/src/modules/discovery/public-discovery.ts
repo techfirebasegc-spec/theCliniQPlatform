@@ -2,7 +2,15 @@ import { localToUtcEarlier } from '../availability/timezone.js';
 import type { AvailabilityException, AvailabilityRule, BookableService } from '../appointments/appointments.js';
 
 export type PublicDoctor = { id: string; displayName: string | null };
-export type PublicService = { id: string; doctorProfileId: string; name: string; description: string | null; currency: string; amountMinor: string };
+export type PublicClinic = { id: string; displayName: string };
+export type PublicService = {
+  id: string;
+  provider: { kind: 'DOCTOR'; doctorProfileId: string } | { kind: 'CLINIC'; clinicId: string };
+  name: string;
+  description: string | null;
+  currency: string;
+  amountMinor: string;
+};
 export type PublicAvailability = { date: string; timezone: string; slots: { localStart: string; startsAt: Date; endsAt: Date; remainingCapacity: number }[] };
 
 export class PublicDiscoveryError extends Error {
@@ -12,7 +20,9 @@ export class PublicDiscoveryError extends Error {
 export interface PublicDiscoveryRepository {
   listDoctors(query: string | undefined): Promise<PublicDoctor[]>;
   findDoctor(doctorProfileId: string): Promise<PublicDoctor | null>;
-  listServices(filter: { doctorProfileId?: string; query?: string }): Promise<PublicService[]>;
+  listClinics(query: string | undefined): Promise<PublicClinic[]>;
+  findClinic(clinicId: string): Promise<PublicClinic | null>;
+  listServices(filter: { doctorProfileId?: string; clinicId?: string; query?: string }): Promise<PublicService[]>;
   findCandidateServices(exposureId: string): Promise<BookableService[]>;
   findBookableService(exposureId: string, requestedLocalAt: string): Promise<BookableService | null>;
   activeCapacityUnits(versionId: string, startsAt: Date, endsAt: Date): Promise<number>;
@@ -23,13 +33,20 @@ export class PublicDiscoveryService {
   public constructor(private readonly repository: PublicDiscoveryRepository, private readonly now: () => Date = () => new Date()) {}
 
   public doctors(query?: string): Promise<PublicDoctor[]> { return this.repository.listDoctors(normalizeQuery(query)); }
+  public clinics(query?: string): Promise<PublicClinic[]> { return this.repository.listClinics(normalizeQuery(query)); }
   public async doctor(doctorProfileId: string): Promise<{ doctor: PublicDoctor; services: PublicService[] }> {
     const doctor = await this.repository.findDoctor(requiredId(doctorProfileId));
     if (!doctor) throw new PublicDiscoveryError('NOT_FOUND');
     return { doctor, services: await this.repository.listServices({ doctorProfileId: doctor.id }) };
   }
-  public services(filter: { doctorProfileId?: string; query?: string }): Promise<PublicService[]> {
-    return this.repository.listServices({ doctorProfileId: filter.doctorProfileId ? requiredId(filter.doctorProfileId) : undefined, query: normalizeQuery(filter.query) });
+  public async clinic(clinicId: string): Promise<{ clinic: PublicClinic; services: PublicService[] }> {
+    const clinic = await this.repository.findClinic(requiredId(clinicId));
+    if (!clinic) throw new PublicDiscoveryError('NOT_FOUND');
+    return { clinic, services: await this.repository.listServices({ clinicId: clinic.id }) };
+  }
+  public services(filter: { doctorProfileId?: string; clinicId?: string; query?: string }): Promise<PublicService[]> {
+    if (filter.doctorProfileId && filter.clinicId) throw new PublicDiscoveryError('CONFLICT');
+    return this.repository.listServices({ doctorProfileId: filter.doctorProfileId ? requiredId(filter.doctorProfileId) : undefined, clinicId: filter.clinicId ? requiredId(filter.clinicId) : undefined, query: normalizeQuery(filter.query) });
   }
   public async availability(exposureId: string, date: string): Promise<PublicAvailability> {
     validateDate(date); const id = requiredId(exposureId); const candidates = await this.repository.findCandidateServices(id);

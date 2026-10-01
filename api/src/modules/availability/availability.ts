@@ -22,7 +22,7 @@ export interface AvailabilityRepository {
 }
 
 export class AvailabilityService {
-  public constructor(private readonly repository: AvailabilityRepository, private readonly context: Pick<TenantContextService, 'require'>, private readonly audit: AuditRepository) {}
+  public constructor(private readonly repository: AvailabilityRepository, private readonly context: Pick<TenantContextService, 'require'> & Partial<Pick<TenantContextService, 'isPlatformAdministrator'>>, private readonly audit: AuditRepository) {}
   public async create(accountId: string | undefined, versionId: string, input: AvailabilityInput): Promise<AvailabilityConfiguration> {
     const actor = this.requireAccount(accountId); const owner = await this.authorize(actor, versionId); let value: AvailabilityConfiguration;
     try { value = normalize(versionId, input); await this.repository.transaction((database) => this.repository.create(database, value, actor)); }
@@ -31,8 +31,9 @@ export class AvailabilityService {
     return value;
   }
   public async read(accountId: string | undefined, versionId: string): Promise<AvailabilityConfiguration> { const actor = this.requireAccount(accountId); await this.authorize(actor, versionId); const result = await this.repository.findManaged(versionId); if (!result) return this.denied(actor, versionId); return result; }
-  private async authorize(accountId: string, versionId: string): Promise<AvailabilityOwner> { const doctor = await this.repository.findVersionOwnerForDoctor(versionId, accountId); if (doctor) return doctor; const owner = await this.repository.findVersionOwner(versionId); if (!owner || owner.kind !== 'CLINIC') return this.denied(accountId, versionId); try { await this.context.require(accountId, owner.tenantId, 'clinic.manage'); return owner; } catch { return this.denied(accountId, versionId, owner.tenantId); } }
+  private async authorize(accountId: string, versionId: string): Promise<AvailabilityOwner> { const doctor = await this.repository.findVersionOwnerForDoctor(versionId, accountId); if (doctor) return doctor; const owner = await this.repository.findVersionOwner(versionId); if (!owner) return this.denied(accountId, versionId); if (owner.kind === 'DOCTOR') { if (await this.isPlatformAdmin(accountId)) return owner; return this.denied(accountId, versionId); } try { await this.context.require(accountId, owner.tenantId, 'clinic.manage'); return owner; } catch { return this.denied(accountId, versionId, owner.tenantId); } }
   private requireAccount(accountId: string | undefined): string { if (!accountId) throw new AvailabilityError('UNAUTHORIZED'); return accountId; }
+  private async isPlatformAdmin(accountId: string): Promise<boolean> { return this.context.isPlatformAdministrator ? this.context.isPlatformAdministrator(accountId) : false; }
   private async denied(accountId: string, targetId: string, tenantId?: string): Promise<never> { await this.audit.append({ category: 'AUTHORIZATION', eventType: 'AVAILABILITY_ACCESS_DENIED', actorAccountId: accountId, tenantId, targetType: 'SERVICE_OFFERING_VERSION', targetId, outcome: 'DENIED' }); throw new AvailabilityError('FORBIDDEN'); }
   private async failed(accountId: string, targetId: string, tenantId: string | undefined, error: unknown): Promise<never> { if (error instanceof AvailabilityError) throw error; const code = error instanceof RecurrenceError || error instanceof TimezoneError || constraint(error) ? 'CONFLICT' : 'FORBIDDEN'; await this.audit.append({ category: 'SECURITY', eventType: 'AVAILABILITY_CONFIGURATION_REJECTED', actorAccountId: accountId, tenantId, targetType: 'SERVICE_OFFERING_VERSION', targetId, outcome: 'DENIED' }); throw new AvailabilityError(code); }
 }

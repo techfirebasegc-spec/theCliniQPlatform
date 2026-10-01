@@ -79,6 +79,8 @@ export class AppointmentAuthorizationService {
     const appointment = await this.repository.findAccessContextForUpdate(database, appointmentId);
     if (!appointment) return this.denied(accountId, appointmentId);
 
+    if (this.elevated && await this.elevated.authorize(accountId, appointment, operation)) return appointment;
+
     const patient = appointment.participants.find((participant): participant is Extract<AppointmentParticipant, { type: 'PATIENT' }> => participant.type === 'PATIENT');
     if (patient && await this.repository.accountOwnsPatientProfileForUpdate(database, accountId, patient.patientProfileId)) {
       if (operation === 'appointment.view' || operation === 'appointment.cancel' || operation === 'appointment.reschedule') return appointment;

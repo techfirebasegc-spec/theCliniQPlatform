@@ -8,6 +8,8 @@ export interface VerifiedFirebaseIdentity {
   provider: FirebaseIdentityProvider;
   subject: string;
   verifiedAt: Date;
+  email?: string;
+  emailVerified?: boolean;
 }
 
 export interface FirebaseIdentityVerifier {
@@ -16,6 +18,7 @@ export interface FirebaseIdentityVerifier {
 
 export const sharedFirebaseIdentityProviders: readonly FirebaseIdentityProvider[] = ['firebase_google', 'firebase_phone'];
 export const adminFirebaseIdentityProviders: readonly FirebaseIdentityProvider[] = ['firebase_password'];
+export const ownerFirebaseIdentityProviders: readonly FirebaseIdentityProvider[] = ['firebase_password', 'firebase_google'];
 
 export class FirebaseIdentityVerificationError extends Error {
   public constructor() {
@@ -39,7 +42,13 @@ export class FirebaseAdminIdentityVerifier implements FirebaseIdentityVerifier {
       const token = await getAuth(app).verifyIdToken(idToken, true);
       const provider = firebaseIdentityProviderFromSignInProvider(token.firebase.sign_in_provider);
       if (provider === null) throw new FirebaseIdentityVerificationError();
-      return { provider, subject: token.uid, verifiedAt: new Date() };
+      return {
+        provider,
+        subject: token.uid,
+        verifiedAt: new Date(),
+        email: typeof token.email === 'string' ? token.email : undefined,
+        emailVerified: token.email_verified === true,
+      };
     } catch (error) {
       if (error instanceof FirebaseIdentityVerificationError) throw error;
       throw new FirebaseIdentityVerificationError();

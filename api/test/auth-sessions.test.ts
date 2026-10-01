@@ -46,11 +46,20 @@ describe('Firebase platform session bridge routes', () => {
     await app.close();
   });
 
-  it('uses a cross-site secure cookie only for the explicit local Admin development origin', async () => {
+  it.each(['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'])('uses a cross-site secure cookie for explicit local browser origin %s', async (origin) => {
     const { app } = appWith();
-    const response = await app.inject({ method: 'POST', url: '/v1/auth/firebase/session', headers: { origin: 'http://localhost:3001' }, payload: { idToken: 'firebase-token' } });
+    const response = await app.inject({ method: 'POST', url: '/v1/auth/firebase/session', headers: { origin }, payload: { idToken: 'firebase-token' } });
     expect(response.statusCode).toBe(204);
     expect(response.headers['set-cookie']).toContain('SameSite=none');
+    expect(response.headers['set-cookie']).toContain('Secure');
+    await app.close();
+  });
+
+  it('keeps the production session cookie policy unchanged', async () => {
+    const { app } = appWith();
+    const response = await app.inject({ method: 'POST', url: '/v1/auth/firebase/session', headers: { origin: 'https://thecliniq.co.in' }, payload: { idToken: 'firebase-token' } });
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['set-cookie']).toContain('SameSite=lax');
     expect(response.headers['set-cookie']).toContain('Secure');
     await app.close();
   });
