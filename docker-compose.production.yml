@@ -1,0 +1,36 @@
+services:
+  api:
+    image: ghcr.io/techfirebasegc-spec/cliniq-api:${CLINIQ_API_IMAGE_TAG}
+    container_name: cliniq-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4000:4000"
+    env_file:
+      - /etc/cliniq/api.env
+    environment:
+      API_HOST: 0.0.0.0
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-adminsdk.json
+    volumes:
+      - type: bind
+        source: /opt/CliniQPlatform/firebase-adminsdk.json
+        target: /run/secrets/firebase-adminsdk.json
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:4000/ready')
+          .then(r => process.exit(r.ok ? 0 : 1))
+          .catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - docker_default
+
+networks:
+  docker_default:
+    external: true

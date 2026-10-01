@@ -15,7 +15,9 @@
     "test:watch": "vitest",
     "migrate:up": "node scripts/run-migration.mjs up",
     "migrate:down": "node scripts/run-migration.mjs down",
-    "provision-admin": "tsx scripts/provision-admin.ts"
+    "provision-admin": "tsx scripts/provision-admin.ts",
+    "fixture:multi-provider-local": "tsx scripts/seed-multi-provider-local.ts",
+    "fixture:platform-organization-local": "tsx scripts/seed-platform-organization-local.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",

@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: cliniq-postgres-local
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cliniq
+      POSTGRES_PASSWORD: cliniq
+      POSTGRES_DB: cliniq_platform
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - cliniq_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cliniq -d cliniq_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cliniq-redis-local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - cliniq_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  cliniq_postgres_data:
+  cliniq_redis_data:
